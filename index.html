@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HouseUnity - Provisioning Script</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>HouseUnity</h1>
+            <p class="sub">Script de aprovisionamiento automatizado</p>
+        </header>
+
+        <main>
+            <section class="instalación">
+                <h2>Instalación</h2>
+                <p class="descripción">Este script automatiza la instalación de HouseUnity en Rocky Linux Minimal</p>
+
+                <div class="code-block">
+                    <code id="wget">wget https://tudominio.com/scripts/provision-houseunity.sh && chmod +x provision-houseunity.sh && sudo ./provision-houseunity.sh</code>
+                    <button class="copy-btn" data-target="wget">Copiar</button>
+                </div>
+            </section>
+        </main>
+        <footer>
+            <p>© 2025 HouseUnity - Tech&Code</p>
+        </footer>
+    </div>
+    <div id="notification" class="notificación"></div>
+    <script src="main.js"></script>
+</body>
+</html>
