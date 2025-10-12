@@ -107,19 +107,45 @@ detect_os() {
 
 # Función para actualizar el sistema
 update_system() {
-    log "Actualizando el sistema..."
     case "$OS" in
         ubuntu|debian)
+            log "Actualizando repositorios del sistema..."
             sudo apt-get update -qq
-            sudo apt-get upgrade -y -qq
+            
+            if [ "$ENV_MODE" = "prod" ]; then
+                log "Actualizando todos los paquetes (puede tardar 10-15 min)..."
+                sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+            else
+                log "Actualizando solo paquetes críticos (modo desarrollo)..."
+                sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq --with-new-pkgs
+            fi
             ;;
         centos|rhel|fedora|rocky)
-            sudo yum update -y -q
+            # Optimizar DNF para Rocky Linux
+            log "Optimizando DNF para descargas más rápidas..."
+            if ! grep -q "fastestmirror=True" /etc/dnf/dnf.conf 2>/dev/null; then
+                echo "fastestmirror=True" | sudo tee -a /etc/dnf/dnf.conf > /dev/null
+                echo "max_parallel_downloads=10" | sudo tee -a /etc/dnf/dnf.conf > /dev/null
+                echo "deltarpm=True" | sudo tee -a /etc/dnf/dnf.conf > /dev/null
+            fi
+            
+            # Limpiar caché viejo
+            sudo dnf clean all > /dev/null 2>&1 || true
+            
+            if [ "$ENV_MODE" = "prod" ]; then
+                log "Actualizando sistema completo (puede tardar 10-20 min)..."
+                sudo dnf update -y --nobest --skip-broken
+            else
+                log "Actualizando solo paquetes críticos (3-5 min aprox)..."
+                sudo dnf update -y --security --nobest 2>&1 | grep -E "Upgrading|Installing|Complete|Nothing" || true
+            fi
             ;;
         *)
             error "Sistema operativo no soportado: $OS"
             ;;
     esac
+    
+    log "✓ Sistema actualizado correctamente"
 }
 
 # Función para instalar paquetes básicos
@@ -409,7 +435,15 @@ setup_project() {
         info "Usando el binario 'docker-compose' (standalone)."
     fi
 
-    # 5. Construir e iniciar contenedores
+    # 5. Limpiar contenedores previos (si existen)
+    log "Limpiando contenedores previos (si existen)..."
+    if [ -n "$DOCKER_COMPOSE_SUBCMD" ]; then
+        "$DOCKER_COMPOSE_CMD" "$DOCKER_COMPOSE_SUBCMD" down -v 2>/dev/null || true
+    else
+        "$DOCKER_COMPOSE_CMD" down -v 2>/dev/null || true
+    fi
+    
+    # 6. Construir e iniciar contenedores
     log "Construyendo contenedores Docker..."
     if [ -n "$DOCKER_COMPOSE_SUBCMD" ]; then
         "$DOCKER_COMPOSE_CMD" "$DOCKER_COMPOSE_SUBCMD" build
@@ -419,16 +453,16 @@ setup_project() {
     
     log "Iniciando contenedores..."
     if [ -n "$DOCKER_COMPOSE_SUBCMD" ]; then
-        "$DOCKER_COMPOSE_CMD" "$DOCKER_COMPOSE_SUBCMD" up -d
+        "$DOCKER_COMPOSE_CMD" "$DOCKER_COMPOSE_SUBCMD" up --build -d
     else
-        "$DOCKER_COMPOSE_CMD" up -d
+        "$DOCKER_COMPOSE_CMD" up --build -d
     fi
     
-    # 6. Esperar que MySQL esté listo
+    # 7. Esperar que MySQL esté listo
     log "Esperando que MySQL esté listo..."
     sleep 10
     
-    # 7. Configurar permisos finales
+    # 8. Configurar permisos finales
     log "Configurando permisos finales..."
     if [ -d "$project_dir/public/uploads" ]; then
         sudo chmod -R 775 "$project_dir/public/uploads"
@@ -436,6 +470,60 @@ setup_project() {
     fi
     
     log "Proyecto HouseUnity configurado correctamente"
+}
+
+# Función para mostrar información de acceso
+show_access_info() {
+    log "════════════════════════════════════════════════════════════════════"
+    log "✓ Instalación completada exitosamente"
+    log ""
+    
+    # Detectar IP de la VM
+    VM_IP=$(ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -1)
+    
+    # Detectar puertos del docker-compose.yml
+    BACKEND_PORT=$(grep -A 5 "ports:" "$PROJECT_DIR/docker-compose.yml" 2>/dev/null | grep -oP '"\K\d+(?=:)' | head -1)
+    FRONTEND_PORT=$(grep -A 5 "ports:" "$PROJECT_DIR/docker-compose.yml" 2>/dev/null | grep -oP '"\K\d+(?=:)' | sed -n '2p')
+    
+    # Valores por defecto si no se encuentran
+    BACKEND_PORT=${BACKEND_PORT:-8080}
+    FRONTEND_PORT=${FRONTEND_PORT:-5173}
+    
+    log "📍 Accede a tu aplicación desde tu navegador (Windows/otro PC):"
+    log ""
+    
+    # Detectar si es NAT o Bridge
+    if [[ "$VM_IP" == 10.0.2.* ]]; then
+        warn "⚠️  Red en modo NAT detectada"
+        log "   Configura Port Forwarding en VirtualBox:"
+        log ""
+        log "   VirtualBox → Settings → Network → Port Forwarding"
+        log "   • Host Port: $BACKEND_PORT  → Guest Port: $BACKEND_PORT"
+        log "   • Host Port: $FRONTEND_PORT → Guest Port: $FRONTEND_PORT"
+        log ""
+        log "   Luego accede con:"
+        log "   • Aplicación:  http://localhost:$BACKEND_PORT"
+        log "   • Frontend:    http://localhost:$FRONTEND_PORT"
+    else
+        log "   • Aplicación Web:  http://$VM_IP:$BACKEND_PORT"
+        log "   • Frontend Dev:    http://$VM_IP:$FRONTEND_PORT"
+        log "   • Base de Datos:   mysql://$VM_IP:3307"
+    fi
+    
+    log ""
+    log "📊 Comandos útiles desde SSH:"
+    log "   • Ver logs:       docker compose logs -f"
+    log "   • Ver estado:     docker compose ps"
+    log "   • Reiniciar:      docker compose restart"
+    log "   • Detener:        docker compose down"
+    log "   • Reconstruir:    docker compose up --build -d"
+    log ""
+    log "🔍 Probar desde Rocky Linux:"
+    log "   • curl http://localhost:$BACKEND_PORT"
+    log "   • docker ps"
+    log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT'"
+    log ""
+    log "════════════════════════════════════════════════════════════════════"
 }
 
 # Función principal
@@ -460,29 +548,14 @@ main() {
     clone_repository "$REPO_URL" "$PROJECT_DIR"
     setup_project "$PROJECT_DIR"
     
-    # Información final
-    log "¡Provisionamiento de HouseUnity completado exitosamente!"
-    info "Ambiente: $ENV_MODE"
-    info "Directorio: $PROJECT_DIR"
-    info "Aplicación web: http://localhost:8080"
-    info "Base de datos MySQL: localhost:3307"
-    info "Sistema de backup: Configurado automáticamente"
+    # Mostrar información de acceso
+    show_access_info
     
-    DOCKER_COMPOSE_CMD="docker-compose"
-    if command -v docker &> /dev/null && docker compose version &> /dev/null; then
-        DOCKER_COMPOSE_CMD="docker compose"
-    fi
-    
-    log "Comandos útiles:"
-    info "Ver logs: $DOCKER_COMPOSE_CMD logs -f"
-    info "Detener: $DOCKER_COMPOSE_CMD down"
-    info "Iniciar: $DOCKER_COMPOSE_CMD up -d"
-    info "Estado: $DOCKER_COMPOSE_CMD ps"
-    
-    warn "Recuerda cerrar sesión y volver a iniciar para que los cambios del grupo 'docker' surtan efecto."
+    # Advertencias finales
+    warn "⚠️  Recuerda cerrar sesión y volver a iniciar para que los cambios del grupo 'docker' surtan efecto."
     
     if [ "$ENV_MODE" == "prod" ]; then
-        warn "PRODUCCIÓN: Revisa y actualiza las credenciales en .env antes de usar en producción."
+        warn "⚠️  PRODUCCIÓN: Revisa y actualiza las credenciales en .env antes de usar en producción."
     fi
 }
 
