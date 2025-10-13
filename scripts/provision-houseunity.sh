@@ -113,16 +113,16 @@ update_system() {
             sudo apt-get update -qq
             
             if [ "$ENV_MODE" = "prod" ]; then
-                log "Actualizando todos los paquetes..."
+                log "Actualizando todos los paquetes (puede tardar 10-15 min)..."
                 sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
             else
-                log "Actualizando paquetes críticos..."
+                log "Actualizando solo paquetes críticos (modo desarrollo)..."
                 sudo DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq --with-new-pkgs
             fi
             ;;
         centos|rhel|fedora|rocky)
             # Optimizar DNF para Rocky Linux
-            log "Configurando DNF..."
+            log "Optimizando DNF para descargas más rápidas..."
             if ! grep -q "fastestmirror=True" /etc/dnf/dnf.conf 2>/dev/null; then
                 echo "fastestmirror=True" | sudo tee -a /etc/dnf/dnf.conf > /dev/null
                 echo "max_parallel_downloads=10" | sudo tee -a /etc/dnf/dnf.conf > /dev/null
@@ -133,10 +133,10 @@ update_system() {
             sudo dnf clean all > /dev/null 2>&1 || true
             
             if [ "$ENV_MODE" = "prod" ]; then
-                log "Actualizando sistema completo..."
+                log "Actualizando sistema completo (puede tardar 10-20 min)..."
                 sudo dnf update -y --nobest --skip-broken
             else
-                log "Actualizando paquetes críticos..."
+                log "Actualizando solo paquetes críticos (3-5 min aprox)..."
                 sudo dnf update -y --security --nobest 2>&1 | grep -E "Upgrading|Installing|Complete|Nothing" || true
             fi
             ;;
@@ -158,18 +158,8 @@ install_basic_tools() {
                 gnupg-agent unzip make nano htop tree net-tools 
             ;;
         centos|rhel|fedora|rocky)
-            # Habilitar EPEL para Rocky Linux/RHEL
-            if [[ "$OS" == "rocky" || "$OS" == "rhel" ]]; then
-                log "Habilitando repositorio EPEL..."
-                sudo dnf install -y epel-release || warn "No se pudo instalar EPEL, continuando..."
-            fi
-            
-            # Instalar paquetes básicos
-            sudo dnf install -y git curl wget rsync openssh-clients openssh-server \
-                unzip nano vim make tree net-tools || warn "Algunos paquetes básicos fallaron, continuando..."
-            
-            # Intentar instalar htop (puede fallar si EPEL no está disponible)
-            sudo dnf install -y htop || warn "htop no disponible, continuando sin él..."
+            sudo yum install -y -q git curl wget rsync openssh-clients openssh-server \
+                unzip nano htop vim make tree net-tools
             ;;
         *)
             error "Sistema operativo no soportado para la instalación de herramientas básicas: $OS"
@@ -212,9 +202,9 @@ install_docker() {
                 sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
                 sudo dnf -y -q install docker-ce docker-ce-cli containerd.io docker-compose-plugin
             else
-                sudo dnf install -y -q dnf-plugins-core
-                sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-                sudo dnf install -y -q docker-ce docker-ce-cli containerd.io docker-compose-plugin
+                sudo yum install -y -q yum-utils
+                sudo yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+                sudo yum install -y -q docker-ce docker-ce-cli containerd.io docker-compose-plugin
             fi
             ;;
         *)
@@ -426,12 +416,25 @@ setup_project() {
         info "Si necesitas reconfigurarlo, elimina .env y ejecuta el script nuevamente."
     fi
     
-    # 3. Crear directorios necesarios
+    # 3. Crear directorios necesarios y configurar permisos para Docker
     log "Creando directorios necesarios..."
     mkdir -p public/uploads
     mkdir -p backup-system/logs
-    chmod 755 public/uploads
-    chmod 755 backup-system/logs
+    
+    log "Configurando permisos para contenedores Docker..."
+    # Permisos 777 para que www-data/apache pueda escribir en Docker
+    chmod -R 777 public/uploads
+    chmod -R 755 backup-system/logs
+    
+    # Deshabilitar SELinux temporalmente si está activo (solo Rocky/CentOS)
+    if command -v getenforce &> /dev/null; then
+        if [ "$(getenforce)" != "Disabled" ]; then
+            warn "SELinux detectado. Configurando contexto para Docker..."
+            sudo setenforce 0 2>/dev/null || true
+            # Hacer permanente (opcional)
+            sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config 2>/dev/null || true
+        fi
+    fi
     
     # 4. Determinar comando Docker Compose
     DOCKER_COMPOSE_CMD="docker-compose"
@@ -472,11 +475,12 @@ setup_project() {
     log "Esperando que MySQL esté listo..."
     sleep 10
     
-    # 8. Configurar permisos finales
-    log "Configurando permisos finales..."
+    # 8. Configurar permisos finales para uploads (crucial para Docker)
+    log "Configurando permisos finales para uploads..."
     if [ -d "$project_dir/public/uploads" ]; then
-        sudo chmod -R 775 "$project_dir/public/uploads"
-        sudo chown -R "$USER:$USER" "$project_dir/public/uploads"
+        # 777 permite que el usuario del contenedor (www-data) pueda escribir
+        sudo chmod -R 777 "$project_dir/public/uploads"
+        info "Directorio public/uploads configurado con permisos 777"
     fi
     
     log "Proyecto HouseUnity configurado correctamente"
