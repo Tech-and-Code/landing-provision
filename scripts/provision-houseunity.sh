@@ -294,31 +294,54 @@ setup_ssh() {
     log "SSH configurado correctamente"
 }
 
-# Función para configurar el acceso SSH a GitHub
 setup_github_ssh() {
     log "Configurando acceso SSH a GitHub..."
     
     local SSH_KEY_PATH="$HOME/.ssh/id_rsa"
     local SSH_PUB_KEY_PATH="$HOME/.ssh/id_rsa.pub"
 
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+
     if [ -f "$SSH_KEY_PATH" ]; then
-        warn "La clave SSH ya existe. No se generará una nueva."
+        log "Clave SSH existente detectada. Omitiendo generación."
     else
         info "Generando nueva clave SSH..."
         ssh-keygen -t rsa -b 4096 -C "houseunity@provision-script" -N "" -f "$SSH_KEY_PATH"
-        log "Clave SSH generada."
+        log "Clave SSH generada correctamente."
     fi
-    
-    log "Agrega la siguiente clave pública a tu cuenta de GitHub:"
+
+    echo
+    log "Tu clave pública es:"
     echo -e "${YELLOW}"
     cat "$SSH_PUB_KEY_PATH"
     echo -e "${NC}"
-    
-    read -r -p "Presiona Enter después de haber agregado la clave a GitHub..."
+
+    # --- NUEVO BLOQUE: Copiar clave pública automáticamente al host Windows ---
+    read -r -p "¿Deseas copiar automáticamente la clave pública a tu máquina anfitriona Windows? (s/n): " copy_choice
+    if [[ "$copy_choice" =~ ^[sS]$ ]]; then
+        read -r -p "Introduce la IP de tu máquina Windows: " WIN_IP
+        read -r -p "Introduce tu usuario de Windows (por ejemplo: Usuario): " WIN_USER
+        
+        # Ruta por defecto de SSH en Windows 10/11 (usando WSL o PowerShell)
+        local WIN_SSH_DIR="/mnt/c/Users/$WIN_USER/.ssh"
+        
+        log "Intentando copiar clave pública con scp..."
+        if scp "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\houseunity_vm_id_rsa.pub"; then
+            log "Clave pública copiada correctamente a tu Windows host."
+        else
+            warn "No se pudo copiar la clave pública automáticamente. Hazlo manualmente."
+            warn "Ejemplo: scp $SSH_PUB_KEY_PATH $WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\"
+        fi
+    fi
+
+    log "Agrega la clave pública a tu cuenta de GitHub (Settings → SSH and GPG keys → New SSH key)"
+    read -r -p "Presiona Enter cuando la hayas agregado..."
     
     log "Probando conexión SSH con GitHub..."
     ssh -T git@github.com || true
 }
+
 
 # Función para clonar el repositorio
 clone_repository() {
