@@ -488,22 +488,26 @@ setup_github_ssh() {
     echo -e "${YELLOW}"
     sudo -u "$EFFECTIVE_USER" cat "$SSH_PUB_KEY_PATH"
     echo -e "${NC}"
-    echo
 
-    # --- Instrucciones para copiar clave pública desde Windows ---
-    log "Para copiar la clave pública a tu máquina Windows:"
-    info "Abre PowerShell en Windows y ejecuta el siguiente comando:"
-    echo
-    echo -e "${BLUE}scp $EFFECTIVE_USER@<IP_DE_TU_VM>:$SSH_PUB_KEY_PATH C:\\Users\\<TU_USUARIO_WINDOWS>\\Desktop\\id_rsa_<TU_USUARIO_GITHUB>.pub${NC}"
-    echo
-    info "Ejemplo:"
-    echo -e "${YELLOW}scp houseunity-admin@192.168.1.119:/home/houseunity-admin/.ssh/id_rsa.pub C:\\Users\\mimi\\Desktop\\id_rsa_githubuser.pub${NC}"
-    echo
-    read -r -p "Presiona Enter cuando hayas copiado la clave a tu máquina Windows..."
+    # --- NUEVO BLOQUE: Copiar clave pública automáticamente al host Windows ---
+    read -r -p "¿Deseas copiar automáticamente la clave pública a tu máquina anfitriona Windows? (s/n): " copy_choice
+    if [[ "$copy_choice" =~ ^[sS]$ ]]; then
+        read -r -p "Introduce la IP de tu máquina Windows: " WIN_IP
+        read -r -p "Introduce tu usuario de Windows (por ejemplo: Usuario): " WIN_USER
+
+        local WIN_SSH_DIR="/mnt/c/Users/$WIN_USER/.ssh"
+
+        log "Intentando copiar clave pública con scp..."
+        if sudo -u "$EFFECTIVE_USER" scp "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\houseunity_vm_id_rsa.pub"; then
+            log "Clave pública copiada correctamente a tu Windows host."
+        else
+            warn "No se pudo copiar la clave pública automáticamente. Hazlo manualmente."
+            warn "Ejemplo: scp $SSH_PUB_KEY_PATH $WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\"
+        fi
+    fi
 
     log "Agrega la clave pública a tu cuenta de GitHub (Settings → SSH and GPG keys → New SSH key)"
-    info "URL: https://github.com/settings/keys"
-    read -r -p "Presiona Enter cuando la hayas agregado a GitHub..."
+    read -r -p "Presiona Enter cuando la hayas agregado..."
 
     log "Probando conexión SSH con GitHub..."
     sudo -u "$EFFECTIVE_USER" ssh -T git@github.com || true
@@ -704,6 +708,131 @@ setup_project() {
     log "Proyecto HouseUnity configurado correctamente"
 }
 
+# Función para configurar replicación MySQL Master-Slave
+setup_mysql_replication() {
+    log "🔄 Configurando replicación MySQL Master-Slave..."
+    
+    # Verificar que los contenedores estén corriendo
+    if ! docker ps | grep -q "houseunity-mysql-master"; then
+        warn "Contenedor MySQL Master no encontrado. La replicación no se configurará."
+        return 1
+    fi
+    
+    if ! docker ps | grep -q "houseunity-mysql-slave"; then
+        warn "Contenedor MySQL Slave no encontrado. La replicación no se configurará."
+        return 1
+    fi
+    
+    # Cargar variables de entorno
+    if [ -f .env ]; then
+        export $(grep -v '^#' .env | xargs 2>/dev/null)
+    else
+        error "Archivo .env no encontrado"
+    fi
+    
+    # Esperar a que MySQL Master esté listo
+    info "Esperando que MySQL Master esté disponible..."
+    local max_attempts=30
+    local attempt=0
+    until docker exec houseunity-mysql-master mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD} --silent > /dev/null 2>&1; do
+        attempt=$((attempt + 1))
+        if [ $attempt -ge $max_attempts ]; then
+            error "MySQL Master no está respondiendo después de $max_attempts intentos"
+        fi
+        sleep 2
+    done
+    log "✅ MySQL Master está listo"
+    
+    # Esperar a que MySQL Slave esté listo
+    info "Esperando que MySQL Slave esté disponible..."
+    attempt=0
+    until docker exec houseunity-mysql-slave mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD} --silent > /dev/null 2>&1; do
+        attempt=$((attempt + 1))
+        if [ $attempt -ge $max_attempts ]; then
+            error "MySQL Slave no está respondiendo después de $max_attempts intentos"
+        fi
+        sleep 2
+    done
+    log "✅ MySQL Slave está listo"
+    
+    # Crear usuario de replicación en el Master
+    info "Creando usuario de replicación en Master..."
+    docker exec houseunity-mysql-master mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
+    CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';
+    GRANT REPLICATION SLAVE ON *.* TO 'repl_user'@'%';
+    FLUSH PRIVILEGES;
+    " 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        log "✅ Usuario de replicación creado correctamente"
+    else
+        error "Error al crear usuario de replicación"
+    fi
+    
+    # Obtener el estado del Master
+    info "Obteniendo estado del Master..."
+    MASTER_STATUS=$(docker exec houseunity-mysql-master mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW MASTER STATUS\G" 2>/dev/null)
+    MASTER_LOG_FILE=$(echo "$MASTER_STATUS" | grep "File:" | awk '{print $2}')
+    MASTER_LOG_POS=$(echo "$MASTER_STATUS" | grep "Position:" | awk '{print $2}')
+    
+    if [ -z "$MASTER_LOG_FILE" ] || [ -z "$MASTER_LOG_POS" ]; then
+        error "No se pudo obtener el estado del Master"
+    fi
+    
+    info "Master Log File: $MASTER_LOG_FILE"
+    info "Master Log Position: $MASTER_LOG_POS"
+    
+    # Configurar el Slave
+    info "Configurando Slave para conectarse al Master..."
+    docker exec houseunity-mysql-slave mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
+    STOP SLAVE;
+    CHANGE MASTER TO 
+        MASTER_HOST='mysql',
+        MASTER_USER='repl_user',
+        MASTER_PASSWORD='Repl1c@2024',
+        MASTER_LOG_FILE='$MASTER_LOG_FILE',
+        MASTER_LOG_POS=$MASTER_LOG_POS;
+    START SLAVE;
+    " 2>/dev/null
+    
+    if [ $? -eq 0 ]; then
+        log "✅ Slave configurado correctamente"
+    else
+        error "Error al configurar Slave"
+    fi
+    
+    # Verificar el estado de la replicación
+    sleep 3
+    info "Verificando estado de la replicación..."
+    SLAVE_STATUS=$(docker exec houseunity-mysql-slave mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null)
+    
+    IO_RUNNING=$(echo "$SLAVE_STATUS" | grep "Slave_IO_Running:" | awk '{print $2}')
+    SQL_RUNNING=$(echo "$SLAVE_STATUS" | grep "Slave_SQL_Running:" | awk '{print $2}')
+    SECONDS_BEHIND=$(echo "$SLAVE_STATUS" | grep "Seconds_Behind_Master:" | awk '{print $2}')
+    
+    log ""
+    log "📊 Estado de la Replicación:"
+    log "   • Slave_IO_Running: $IO_RUNNING"
+    log "   • Slave_SQL_Running: $SQL_RUNNING"
+    log "   • Seconds_Behind_Master: $SECONDS_BEHIND"
+    log ""
+    
+    if [ "$IO_RUNNING" == "Yes" ] && [ "$SQL_RUNNING" == "Yes" ]; then
+        log "✅ ¡Replicación MySQL Master-Slave configurada exitosamente!"
+        log ""
+        log "📌 Información de la replicación:"
+        log "   • Master: localhost:3307 (houseunity-mysql-master)"
+        log "   • Slave:  localhost:3308 (houseunity-mysql-slave)"
+        log "   • Base de datos: ${DB_NAME}"
+        log ""
+        return 0
+    else
+        warn "⚠️ La replicación no está funcionando correctamente"
+        warn "Revisa los logs con: docker logs houseunity-mysql-slave"
+        return 1
+    fi
+}
+
 # Función para mostrar información de acceso
 show_access_info() {
     log "════════════════════════════════════════════════════════════════════"
@@ -760,10 +889,18 @@ show_access_info() {
     log "   echo 'CONTRASEÑA' > rsync.pass && chmod 600 rsync.pass"
     log "   rsync -av --port=873 --password-file=rsync.pass archivo.txt backupuser@$VM_IP::backups"
     log ""
-    log "🔍 Probar desde Rocky Linux:"
+    log "� Replicación MySQL Master-Slave:"
+    log "   • Master (R/W):   mysql://$VM_IP:3307"
+    log "   • Slave (R):      mysql://$VM_IP:3308"
+    log ""
+    log "   Verificar estado:"
+    log "   cd ~/Tech-Code-Proyecto/docker/scripts"
+    log "   ./check-replication.sh"
+    log ""
+    log "�🔍 Probar desde Rocky Linux:"
     log "   • curl http://localhost:$BACKEND_PORT"
     log "   • docker ps"
-    log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT|873'"
+    log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT|873|3307|3308'"
     log "   • ls -lh /export"
     log ""
     log "════════════════════════════════════════════════════════════════════"
@@ -794,6 +931,9 @@ main() {
     setup_backup_system "$PROJECT_DIR"
     
     setup_project "$PROJECT_DIR"
+    
+    # Configurar replicación MySQL Master-Slave (después de levantar contenedores)
+    setup_mysql_replication || warn "La replicación MySQL no se configuró. Puedes configurarla manualmente más tarde."
     
     # Mostrar información de acceso
     show_access_info
