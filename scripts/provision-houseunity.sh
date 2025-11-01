@@ -737,7 +737,7 @@ setup_mysql_replication() {
     info "Esperando que MySQL Master esté disponible..."
     local max_attempts=30
     local attempt=0
-    until docker exec houseunity-mysql-master mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD} --silent > /dev/null 2>&1; do
+    until docker exec houseunity-mysql-master mysqladmin ping -h localhost -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
         attempt=$((attempt + 1))
         if [ $attempt -ge $max_attempts ]; then
             error "MySQL Master no está respondiendo después de $max_attempts intentos"
@@ -749,7 +749,7 @@ setup_mysql_replication() {
     # Esperar a que MySQL Slave esté listo
     info "Esperando que MySQL Slave esté disponible..."
     attempt=0
-    until docker exec houseunity-mysql-slave mysqladmin ping -h localhost -u root -p${MYSQL_ROOT_PASSWORD} --silent > /dev/null 2>&1; do
+    until docker exec houseunity-mysql-slave mysqladmin ping -h localhost -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
         attempt=$((attempt + 1))
         if [ $attempt -ge $max_attempts ]; then
             error "MySQL Slave no está respondiendo después de $max_attempts intentos"
@@ -760,21 +760,28 @@ setup_mysql_replication() {
     
     # Crear usuario de replicación en el Master
     info "Creando usuario de replicación en Master..."
-    docker exec houseunity-mysql-master mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
-    CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';
-    GRANT REPLICATION SLAVE ON *.* TO 'repl_user'@'%';
-    FLUSH PRIVILEGES;
-    " 2>/dev/null
     
-    if [ $? -eq 0 ]; then
-        log "✅ Usuario de replicación creado correctamente"
+    # Ejecutar cada comando por separado para mejor manejo de errores
+    if docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e \
+        "CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';"; then
+        log "✓ Usuario de replicación creado/verificado"
     else
-        error "Error al crear usuario de replicación"
+        warn "El usuario de replicación puede ya existir, continuando..."
     fi
+    
+    if docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e \
+        "GRANT REPLICATION SLAVE ON *.* TO 'repl_user'@'%';"; then
+        log "✓ Permisos de replicación otorgados"
+    else
+        error "Error al otorgar permisos de replicación"
+    fi
+    
+    docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "FLUSH PRIVILEGES;"
+    log "✅ Usuario de replicación configurado correctamente"
     
     # Obtener el estado del Master
     info "Obteniendo estado del Master..."
-    MASTER_STATUS=$(docker exec houseunity-mysql-master mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW MASTER STATUS\G" 2>/dev/null)
+    MASTER_STATUS=$(docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW MASTER STATUS\G" 2>/dev/null)
     MASTER_LOG_FILE=$(echo "$MASTER_STATUS" | grep "File:" | awk '{print $2}')
     MASTER_LOG_POS=$(echo "$MASTER_STATUS" | grep "Position:" | awk '{print $2}')
     
@@ -787,7 +794,7 @@ setup_mysql_replication() {
     
     # Configurar el Slave
     info "Configurando Slave para conectarse al Master..."
-    docker exec houseunity-mysql-slave mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "
+    docker exec houseunity-mysql-slave mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "
     STOP SLAVE;
     CHANGE MASTER TO 
         MASTER_HOST='mysql',
@@ -796,7 +803,7 @@ setup_mysql_replication() {
         MASTER_LOG_FILE='$MASTER_LOG_FILE',
         MASTER_LOG_POS=$MASTER_LOG_POS;
     START SLAVE;
-    " 2>/dev/null
+    "
     
     if [ $? -eq 0 ]; then
         log "✅ Slave configurado correctamente"
@@ -807,7 +814,7 @@ setup_mysql_replication() {
     # Verificar el estado de la replicación
     sleep 3
     info "Verificando estado de la replicación..."
-    SLAVE_STATUS=$(docker exec houseunity-mysql-slave mysql -u root -p${MYSQL_ROOT_PASSWORD} -e "SHOW SLAVE STATUS\G" 2>/dev/null)
+    SLAVE_STATUS=$(docker exec houseunity-mysql-slave mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW SLAVE STATUS\G" 2>/dev/null)
     
     IO_RUNNING=$(echo "$SLAVE_STATUS" | grep "Slave_IO_Running:" | awk '{print $2}')
     SQL_RUNNING=$(echo "$SLAVE_STATUS" | grep "Slave_SQL_Running:" | awk '{print $2}')
