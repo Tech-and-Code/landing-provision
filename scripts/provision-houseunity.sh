@@ -761,27 +761,35 @@ setup_mysql_replication() {
     # Crear usuario de replicación en el Master
     info "Creando usuario de replicación en Master..."
     
-    # Ejecutar cada comando por separado para mejor manejo de errores
+    # Mostrar el error completo para diagnóstico
+    echo "Ejecutando: CREATE USER IF NOT EXISTS 'repl_user'@'%'..."
     if docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e \
-        "CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';"; then
+        "CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';" 2>&1; then
         log "✓ Usuario de replicación creado/verificado"
     else
-        warn "El usuario de replicación puede ya existir, continuando..."
+        ERROR_CODE=$?
+        warn "Advertencia al crear usuario (código: $ERROR_CODE). Puede que ya exista, continuando..."
     fi
     
+    echo "Ejecutando: GRANT REPLICATION SLAVE..."
     if docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e \
-        "GRANT REPLICATION SLAVE ON *.* TO 'repl_user'@'%';"; then
+        "GRANT REPLICATION SLAVE ON *.* TO 'repl_user'@'%';" 2>&1; then
         log "✓ Permisos de replicación otorgados"
     else
-        error "Error al otorgar permisos de replicación"
+        ERROR_CODE=$?
+        echo "===== ERROR DETECTADO ====="
+        echo "Código de error: $ERROR_CODE"
+        echo "Intentando ver más detalles..."
+        docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT user, host FROM mysql.user WHERE user='repl_user';"
+        error "Error al otorgar permisos de replicación. Ver detalles arriba."
     fi
     
-    docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "FLUSH PRIVILEGES;"
+    docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "FLUSH PRIVILEGES;" 2>&1
     log "✅ Usuario de replicación configurado correctamente"
     
     # Obtener el estado del Master
     info "Obteniendo estado del Master..."
-    MASTER_STATUS=$(docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW MASTER STATUS\G" 2>/dev/null)
+    MASTER_STATUS=$(docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SHOW MASTER STATUS\G")
     MASTER_LOG_FILE=$(echo "$MASTER_STATUS" | grep "File:" | awk '{print $2}')
     MASTER_LOG_POS=$(echo "$MASTER_STATUS" | grep "Position:" | awk '{print $2}')
     
