@@ -387,9 +387,11 @@ setup_backup_system() {
     if command -v firewall-cmd &> /dev/null; then
         sudo firewall-cmd --permanent --add-service=nfs 2>/dev/null || true
         sudo firewall-cmd --permanent --add-port=873/tcp 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-port=8873/tcp 2>/dev/null || true
         sudo firewall-cmd --reload 2>/dev/null || true
     elif command -v ufw &> /dev/null; then
         sudo ufw allow 873/tcp 2>/dev/null || true
+        sudo ufw allow 8873/tcp 2>/dev/null || true
         sudo ufw allow nfs 2>/dev/null || true
     fi
     
@@ -963,11 +965,12 @@ show_access_info() {
     log ""
     log "💾 Sistema de Respaldo:"
     log "   • Directorio:     /export"
-    log "   • Puerto rsync:   873"
+    log "   • Puerto rsync HOST:      873"
+    log "   • Puerto rsync Docker:    8873"
     log "   • Usuario:        backupuser"
     log "   • Contraseña:     Ver /etc/rsyncd.secrets (sudo cat /etc/rsyncd.secrets)"
     log ""
-    log "   Ejemplo desde cliente:"
+    log "   Ejemplo desde cliente (rsync del HOST):"
     log "   echo 'CONTRASEÑA' > rsync.pass && chmod 600 rsync.pass"
     log "   rsync -av --port=873 --password-file=rsync.pass archivo.txt backupuser@$VM_IP::backups"
     log ""
@@ -979,10 +982,10 @@ show_access_info() {
     log "   cd ~/Tech-Code-Proyecto/docker/scripts"
     log "   ./check-replication.sh"
     log ""
-    log "�🔍 Probar desde Rocky Linux:"
+    log "🔍 Probar desde Rocky Linux:"
     log "   • curl http://localhost:$BACKEND_PORT"
     log "   • docker ps"
-    log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT|873|3307|3308'"
+    log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT|873|8873|3307|3308'"
     log "   • ls -lh /export"
     log ""
     log "════════════════════════════════════════════════════════════════════"
