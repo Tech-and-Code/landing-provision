@@ -488,26 +488,22 @@ setup_github_ssh() {
     echo -e "${YELLOW}"
     sudo -u "$EFFECTIVE_USER" cat "$SSH_PUB_KEY_PATH"
     echo -e "${NC}"
+    echo
 
-    # --- NUEVO BLOQUE: Copiar clave pública automáticamente al host Windows ---
-    read -r -p "¿Deseas copiar automáticamente la clave pública a tu máquina anfitriona Windows? (s/n): " copy_choice
-    if [[ "$copy_choice" =~ ^[sS]$ ]]; then
-        read -r -p "Introduce la IP de tu máquina Windows: " WIN_IP
-        read -r -p "Introduce tu usuario de Windows (por ejemplo: Usuario): " WIN_USER
-
-        local WIN_SSH_DIR="/mnt/c/Users/$WIN_USER/.ssh"
-
-        log "Intentando copiar clave pública con scp..."
-        if sudo -u "$EFFECTIVE_USER" scp "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\houseunity_vm_id_rsa.pub"; then
-            log "Clave pública copiada correctamente a tu Windows host."
-        else
-            warn "No se pudo copiar la clave pública automáticamente. Hazlo manualmente."
-            warn "Ejemplo: scp $SSH_PUB_KEY_PATH $WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\"
-        fi
-    fi
+    # --- Instrucciones para copiar clave pública desde Windows ---
+    log "Para copiar la clave pública a tu máquina Windows:"
+    info "Abre PowerShell en Windows y ejecuta el siguiente comando:"
+    echo
+    echo -e "${BLUE}scp $EFFECTIVE_USER@<IP_DE_TU_VM>:$SSH_PUB_KEY_PATH C:\\Users\\<TU_USUARIO_WINDOWS>\\Desktop\\id_rsa_<TU_USUARIO_GITHUB>.pub${NC}"
+    echo
+    info "Ejemplo:"
+    echo -e "${YELLOW}scp houseunity-admin@192.168.1.119:/home/houseunity-admin/.ssh/id_rsa.pub C:\\Users\\mimi\\Desktop\\id_rsa_githubuser.pub${NC}"
+    echo
+    read -r -p "Presiona Enter cuando hayas copiado la clave a tu máquina Windows..."
 
     log "Agrega la clave pública a tu cuenta de GitHub (Settings → SSH and GPG keys → New SSH key)"
-    read -r -p "Presiona Enter cuando la hayas agregado..."
+    info "URL: https://github.com/settings/keys"
+    read -r -p "Presiona Enter cuando la hayas agregado a GitHub..."
 
     log "Probando conexión SSH con GitHub..."
     sudo -u "$EFFECTIVE_USER" ssh -T git@github.com || true
