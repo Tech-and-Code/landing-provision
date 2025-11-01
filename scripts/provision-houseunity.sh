@@ -294,54 +294,64 @@ setup_ssh() {
     log "SSH configurado correctamente"
 }
 
+# ------------------------------------------------------------
+# Configurar autenticación SSH con GitHub y copia opcional a Windows
+# ------------------------------------------------------------
 setup_github_ssh() {
-    log "Configurando acceso SSH a GitHub..."
-    
-    local SSH_KEY_PATH="$HOME/.ssh/id_rsa"
-    local SSH_PUB_KEY_PATH="$HOME/.ssh/id_rsa.pub"
+    log "Configurando autenticación SSH con GitHub..."
 
-    mkdir -p "$HOME/.ssh"
-    chmod 700 "$HOME/.ssh"
+    SSH_DIR="$HOME/.ssh"
+    SSH_KEY_PATH="$SSH_DIR/id_rsa"
+    SSH_PUB_KEY_PATH="$SSH_KEY_PATH.pub"
 
-    if [ -f "$SSH_KEY_PATH" ]; then
-        log "Clave SSH existente detectada. Omitiendo generación."
-    else
+    mkdir -p "$SSH_DIR"
+    chmod 700 "$SSH_DIR"
+
+    if [[ ! -f "$SSH_KEY_PATH" ]]; then
         info "Generando nueva clave SSH..."
-        ssh-keygen -t rsa -b 4096 -C "houseunity@provision-script" -N "" -f "$SSH_KEY_PATH"
-        log "Clave SSH generada correctamente."
+        ssh-keygen -t rsa -b 4096 -C "houseunity@provision" -f "$SSH_KEY_PATH" -N ""
+        log "Clave SSH generada en: $SSH_KEY_PATH"
+    else
+        info "Ya existe una clave SSH en $SSH_KEY_PATH, se reutilizará."
     fi
 
-    echo
-    log "Tu clave pública es:"
-    echo -e "${YELLOW}"
+    eval "$(ssh-agent -s)" >/dev/null 2>&1
+    ssh-add "$SSH_KEY_PATH" >/dev/null 2>&1
+
+    info "Clave pública generada:"
+    echo "------------------------------------------------------------"
     cat "$SSH_PUB_KEY_PATH"
-    echo -e "${NC}"
+    echo "------------------------------------------------------------"
+    info "Copia esta clave en tu cuenta de GitHub → Settings → SSH and GPG keys"
+
+    read -r -p "¿Deseas probar la conexión con GitHub ahora? (s/n): " test_choice
+    if [[ "$test_choice" =~ ^[sS]$ ]]; then
+        ssh -T git@github.com || warn "No se pudo verificar la conexión con GitHub todavía."
+    fi
 
     # --- NUEVO BLOQUE: Copiar clave pública automáticamente al host Windows ---
     read -r -p "¿Deseas copiar automáticamente la clave pública a tu máquina anfitriona Windows? (s/n): " copy_choice
     if [[ "$copy_choice" =~ ^[sS]$ ]]; then
-        read -r -p "Introduce la IP de tu máquina Windows: " WIN_IP
-        read -r -p "Introduce tu usuario de Windows (por ejemplo: Usuario): " WIN_USER
-        
-        # Ruta por defecto de SSH en Windows 10/11 (usando WSL o PowerShell)
-        local WIN_SSH_DIR="/mnt/c/Users/$WIN_USER/.ssh"
-        
-        log "Intentando copiar clave pública con scp..."
-        if scp "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\houseunity_vm_id_rsa.pub"; then
-            log "Clave pública copiada correctamente a tu Windows host."
-        else
-            warn "No se pudo copiar la clave pública automáticamente. Hazlo manualmente."
-            warn "Ejemplo: scp $SSH_PUB_KEY_PATH $WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\"
-        fi
+        toggle_ssh_password_auth on
+
+        read -r -p "Introduce la IP de tu máquina Windows (ej. 192.168.1.151): " WIN_IP
+        read -r -p "Introduce tu usuario de Windows (ej. MIMI ESTUDIOS): " WIN_USER
+
+        log "Intentando crear carpeta .ssh en Windows..."
+        ssh -o StrictHostKeyChecking=no "$WIN_USER@$WIN_IP" 'powershell -Command "New-Item -ItemType Directory -Force -Path $env:USERPROFILE\.ssh"'
+
+        log "Copiando clave pública a Windows..."
+        scp -o StrictHostKeyChecking=no "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:/c/Users/$WIN_USER/.ssh/authorized_keys"
+
+        log "Ajustando permisos en Windows..."
+        ssh "$WIN_USER@$WIN_IP" 'powershell -Command "icacls $env:USERPROFILE\.ssh /grant $env:USERNAME:(OI)(CI)F; icacls $env:USERPROFILE\.ssh\authorized_keys /grant $env:USERNAME:F"'
+
+        toggle_ssh_password_auth off
+        log "Clave pública copiada correctamente y SSH asegurado nuevamente."
+    else
+        info "Omitido: no se copió la clave a Windows."
     fi
-
-    log "Agrega la clave pública a tu cuenta de GitHub (Settings → SSH and GPG keys → New SSH key)"
-    read -r -p "Presiona Enter cuando la hayas agregado..."
-    
-    log "Probando conexión SSH con GitHub..."
-    ssh -T git@github.com || true
 }
-
 
 # Función para clonar el repositorio
 clone_repository() {
