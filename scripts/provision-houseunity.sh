@@ -723,20 +723,43 @@ setup_mysql_replication() {
         return 1
     fi
     
-    # Cargar variables de entorno
-   # Cargar variables de entorno desde .env
+    # Cargar variables de entorno desde .env
     if [ -f .env ]; then
+        log "Cargando variables desde .env..."
         set -a  # Marcar todas las variables para export
         source <(grep -E '^[A-Z_]+=.*' .env | grep -v '^#')
         set +a  # Desactivar auto-export
+        
+        # Verificar que se cargó la contraseña
+        if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+            error "MYSQL_ROOT_PASSWORD no está definida en .env"
+        fi
+        info "Usando MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:0:3}*** (primeros 3 caracteres)"
     else
-       error "Archivo .env no encontrado"
+       error "Archivo .env no encontrado en el directorio actual: $(pwd)"
     fi
     
     # Esperar a que MySQL Master esté listo
     info "Esperando que MySQL Master esté disponible..."
     local max_attempts=30
     local attempt=0
+    
+    # Primero verificar que podemos conectarnos
+    info "Verificando credenciales de MySQL Master..."
+    if ! docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" > /dev/null 2>&1; then
+        echo ""
+        error "No se puede conectar a MySQL Master con las credenciales proporcionadas."
+        echo "Verifica que MYSQL_ROOT_PASSWORD en .env coincida con la contraseña del contenedor."
+        echo ""
+        echo "Para verificar, ejecuta:"
+        echo "  cat .env | grep MYSQL_ROOT_PASSWORD"
+        echo ""
+        echo "Si es necesario, reinicia los contenedores con la contraseña correcta:"
+        echo "  docker-compose down -v"
+        echo "  docker-compose up -d"
+        return 1
+    fi
+    
     until docker exec houseunity-mysql-master mysqladmin ping -h localhost -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
         attempt=$((attempt + 1))
         if [ $attempt -ge $max_attempts ]; then
