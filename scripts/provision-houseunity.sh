@@ -382,9 +382,6 @@ setup_github_ssh() {
         info "Omitido: no se copió la clave a Windows."
     fi
 
-    else
-        info "Omitido: no se copió la clave a Windows."
-    fi
 }
 
 # Función para clonar el repositorio
