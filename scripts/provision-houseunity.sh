@@ -512,31 +512,52 @@ clone_repository() {
             return 1
         fi
 
+        # Cambiar al directorio y validar
+        if ! cd "$target_dir"; then
+            error "No se puede acceder al directorio '$target_dir'"
+            return 1
+        fi
+
+        # Configurar permisos antes de actualizar
+        log "Configurando permisos del repositorio..."
         sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
-        cd "$target_dir"
 
         # Detectar rama principal automáticamente
         local default_branch
-        default_branch=$(git remote show origin | awk '/HEAD branch/ {print $NF}')
-        log "Rama principal detectada: $default_branch"
+        if ! default_branch=$(sudo -u "$EFFECTIVE_USER" git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}'); then
+            warn "No se pudo detectar la rama principal. Usando 'main'..."
+            default_branch="main"
+        fi
+        log "Rama principal: $default_branch"
 
-        sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"
+        # Intentar actualizar el repositorio
+        log "Actualizando repositorio desde origin/$default_branch..."
+        if sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"; then
+            log "✓ Repositorio actualizado correctamente"
+        else
+            error "Fallo al actualizar el repositorio. Verifica conflictos o problemas de conexión."
+            return 1
+        fi
     else
         log "Clonando repositorio en nuevo directorio..."
-        if sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
-            cd "$target_dir"
-        else
+        if ! sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
             error "Fallo al clonar el repositorio. Verifica la URL y los permisos."
+            return 1
+        fi
+        
+        # Cambiar al directorio y validar
+        if ! cd "$target_dir"; then
+            error "No se puede acceder al directorio clonado '$target_dir'"
             return 1
         fi
     fi
 
-    log "Configurando permisos del repositorio..."
+    log "Configurando permisos finales del repositorio..."
     sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
     find . -type d -exec chmod 755 {} \;
     find . -type f -exec chmod 644 {} \;
 
-    log "Repositorio clonado/actualizado en: $target_dir"
+    log "✓ Repositorio clonado/actualizado en: $target_dir"
 }
 
 
