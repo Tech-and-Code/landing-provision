@@ -284,10 +284,11 @@ install_docker_compose() {
     log "Docker Compose Standalone (v2) instalado correctamente como 'docker-compose'"
 }
 
-# Función para instalar paquetes de respaldo (solo instalación)
-install_backup_packages() {
-    log "Instalando paquetes para sistema de respaldo (NFS y rsync)..."
+# Función para configurar sistema de respaldo completo
+setup_backup_system() {
+    log "Configurando sistema de respaldo (NFS y rsync)..."
     
+    # 1. Instalar paquetes
     case "$OS" in
         ubuntu|debian)
             sudo apt-get install -y -qq nfs-kernel-server nfs-common rsync
@@ -301,8 +302,80 @@ install_backup_packages() {
             ;;
     esac
     
-    log "✓ Paquetes de respaldo instalados (NFS y rsync)"
-    info "Para configurar el sistema de respaldo, ejecuta: sudo bash scripts/setup-backup.sh"
+    # 2. Crear directorio /export
+    log "Creando directorio /export..."
+    sudo mkdir -p /export
+    sudo chmod 777 /export
+    sudo chown nobody:nogroup /export 2>/dev/null || sudo chown nobody:nobody /export 2>/dev/null || true
+    
+    # 3. Configurar NFS exports
+    log "Configurando NFS exports..."
+    local NFS_EXPORTS="/etc/exports"
+    if ! grep -q "/export" "$NFS_EXPORTS" 2>/dev/null; then
+        echo "/export *(rw,sync,no_subtree_check,no_root_squash)" | sudo tee -a "$NFS_EXPORTS" > /dev/null
+        log "✓ /export agregado a $NFS_EXPORTS"
+    fi
+    sudo exportfs -ra
+    
+    # 4. Habilitar e iniciar NFS
+    case "$OS" in
+        ubuntu|debian)
+            sudo systemctl enable nfs-kernel-server 2>/dev/null || true
+            sudo systemctl restart nfs-kernel-server
+            ;;
+        centos|rhel|fedora|rocky)
+            sudo systemctl enable nfs-server 2>/dev/null || true
+            sudo systemctl restart nfs-server
+            ;;
+    esac
+    
+    # 5. Copiar archivos de configuración rsync desde el repo
+    log "Configurando rsync daemon desde archivos del repositorio..."
+    local PROJECT_DIR_FOR_BACKUP="$1"
+    
+    if [ -f "$PROJECT_DIR_FOR_BACKUP/docker/scripts/rsyncd.conf" ]; then
+        sudo cp "$PROJECT_DIR_FOR_BACKUP/docker/scripts/rsyncd.conf" /etc/rsyncd.conf
+        log "✓ rsyncd.conf copiado desde el repositorio"
+    else
+        warn "No se encontró rsyncd.conf en el repo. Saltando configuración rsync."
+        return
+    fi
+    
+    if [ -f "$PROJECT_DIR_FOR_BACKUP/docker/scripts/rsyncd.secrets" ]; then
+        sudo cp "$PROJECT_DIR_FOR_BACKUP/docker/scripts/rsyncd.secrets" /etc/rsyncd.secrets
+        sudo chmod 600 /etc/rsyncd.secrets
+        log "✓ rsyncd.secrets copiado desde el repositorio"
+        
+        # Mostrar contraseña
+        BACKUP_PASSWORD=$(grep "backupuser:" /etc/rsyncd.secrets | cut -d: -f2)
+        info "Usuario rsync: backupuser"
+        info "Contraseña rsync: $BACKUP_PASSWORD"
+    else
+        warn "No se encontró rsyncd.secrets en el repo. Saltando configuración rsync."
+        return
+    fi
+    
+    # 6. Iniciar rsync daemon
+    if [[ "$OS" =~ ^(centos|rhel|fedora|rocky)$ ]]; then
+        sudo systemctl enable rsyncd 2>/dev/null || true
+        sudo systemctl restart rsyncd 2>/dev/null || sudo rsync --daemon
+    else
+        sudo pkill rsync 2>/dev/null || true
+        sudo rsync --daemon
+    fi
+    
+    # 7. Configurar firewall
+    log "Configurando firewall..."
+    if command -v firewall-cmd &> /dev/null; then
+        sudo firewall-cmd --permanent --add-service=nfs 2>/dev/null || true
+        sudo firewall-cmd --permanent --add-port=873/tcp 2>/dev/null || true
+        sudo firewall-cmd --reload 2>/dev/null || true
+    elif command -v ufw &> /dev/null; then
+        sudo ufw allow 873/tcp 2>/dev/null || true
+        sudo ufw allow nfs 2>/dev/null || true
+    fi
+    
+    log "✓ Sistema de respaldo configurado correctamente"
 }
 
 # ==========================================================
@@ -656,24 +729,28 @@ show_access_info() {
     fi
     
     log ""
-    log " Comandos útiles desde SSH:"
+    log "📊 Comandos útiles desde SSH:"
     log "   • Ver logs:       docker compose logs -f"
     log "   • Ver estado:     docker compose ps"
     log "   • Reiniciar:      docker compose restart"
     log "   • Detener:        docker compose down"
     log "   • Reconstruir:    docker compose up --build -d"
     log ""
-    log "Configurar Sistema de Respaldo:"
-    log "   Los paquetes NFS y rsync ya están instalados."
-    log "   Para configurar el sistema de respaldo, ejecuta:"
+    log "💾 Sistema de Respaldo:"
+    log "   • Directorio:     /export"
+    log "   • Puerto rsync:   873"
+    log "   • Usuario:        backupuser"
+    log "   • Contraseña:     Ver /etc/rsyncd.secrets (sudo cat /etc/rsyncd.secrets)"
     log ""
-    log "   cd $PROJECT_DIR"
-    log "   sudo bash scripts/setup-backup.sh"
+    log "   Ejemplo desde cliente:"
+    log "   echo 'CONTRASEÑA' > rsync.pass && chmod 600 rsync.pass"
+    log "   rsync -av --port=873 --password-file=rsync.pass archivo.txt backupuser@$VM_IP::backups"
     log ""
-    log " Probar desde Rocky Linux:"
+    log "🔍 Probar desde Rocky Linux:"
     log "   • curl http://localhost:$BACKEND_PORT"
     log "   • docker ps"
-    log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT'"
+    log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT|873'"
+    log "   • ls -lh /export"
     log ""
     log "════════════════════════════════════════════════════════════════════"
 }
@@ -693,12 +770,15 @@ main() {
     install_basic_tools
     install_docker
     install_docker_compose
-    install_backup_packages
     setup_ssh
     setup_github_ssh
     
     # Configuración del proyecto
     clone_repository "$REPO_URL" "$PROJECT_DIR"
+    
+    # Configurar sistema de respaldo (después de clonar repo)
+    setup_backup_system "$PROJECT_DIR"
+    
     setup_project "$PROJECT_DIR"
     
     # Mostrar información de acceso
