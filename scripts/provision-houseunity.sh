@@ -746,12 +746,31 @@ setup_mysql_replication() {
     local max_attempts=30
     local attempt=0
     
-    # Primero verificar que podemos conectarnos
+    # Primero dar tiempo a MySQL para inicializar
+    info "Dando tiempo a MySQL para completar inicialización..."
+    sleep 10
+    
+    # Verificar que podemos conectarnos (con reintentos)
     info "Verificando credenciales de MySQL Master..."
     
-    # Intentar conectar y capturar el error completo
-    TEST_RESULT=$(docker exec houseunity-mysql-master mysql --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" 2>&1)
-    TEST_EXIT_CODE=$?
+    # Intentar conectar con reintentos
+    while [ $attempt -lt 5 ]; do
+        TEST_RESULT=$(docker exec houseunity-mysql-master mysql --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" 2>&1)
+        TEST_EXIT_CODE=$?
+        
+        if [ $TEST_EXIT_CODE -eq 0 ]; then
+            break
+        fi
+        
+        attempt=$((attempt + 1))
+        if [ $attempt -lt 5 ]; then
+            info "MySQL aún no está listo, esperando... (intento $attempt/5)"
+            sleep 5
+        fi
+    done
+    
+    # Reiniciar contador de intentos para el siguiente paso
+    attempt=0
     
     if [ $TEST_EXIT_CODE -ne 0 ]; then
         echo ""
