@@ -396,10 +396,12 @@ setup_github_ssh() {
     sudo -u "$EFFECTIVE_USER" ssh -T git@github.com || true
 }
 
-
 clone_repository() {
     local repo_url=$1
     local target_dir=$2
+
+    # Detectar el usuario real incluso si se ejecuta con sudo
+    local EFFECTIVE_USER="${SUDO_USER:-$USER}"
 
     log "Clonando repositorio: $repo_url en $target_dir"
 
@@ -411,17 +413,18 @@ clone_repository() {
             return 1
         fi
 
-        sudo chown -R "$USER":"$USER" "$target_dir"
+        sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
         cd "$target_dir"
 
         # Detectar rama principal automáticamente
         local default_branch
         default_branch=$(git remote show origin | awk '/HEAD branch/ {print $NF}')
         log "Rama principal detectada: $default_branch"
-        git pull origin "$default_branch"
+
+        sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"
     else
         log "Clonando repositorio en nuevo directorio..."
-        if git clone "$repo_url" "$target_dir"; then
+        if sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
             cd "$target_dir"
         else
             error "Fallo al clonar el repositorio. Verifica la URL y los permisos."
@@ -430,6 +433,7 @@ clone_repository() {
     fi
 
     log "Configurando permisos del repositorio..."
+    sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
     find . -type d -exec chmod 755 {} \;
     find . -type f -exec chmod 644 {} \;
 
