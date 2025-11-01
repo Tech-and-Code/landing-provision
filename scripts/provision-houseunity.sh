@@ -283,6 +283,28 @@ install_docker_compose() {
     
     log "Docker Compose Standalone (v2) instalado correctamente como 'docker-compose'"
 }
+
+# Función para instalar paquetes de respaldo (solo instalación)
+install_backup_packages() {
+    log "Instalando paquetes para sistema de respaldo (NFS y rsync)..."
+    
+    case "$OS" in
+        ubuntu|debian)
+            sudo apt-get install -y -qq nfs-kernel-server nfs-common rsync
+            ;;
+        centos|rhel|fedora|rocky)
+            sudo dnf install -y nfs-utils rsync
+            ;;
+        *)
+            warn "Sistema operativo no reconocido para instalar NFS. Saltando..."
+            return
+            ;;
+    esac
+    
+    log "✓ Paquetes de respaldo instalados (NFS y rsync)"
+    info "Para configurar el sistema de respaldo, ejecuta: sudo bash scripts/setup-backup.sh"
+}
+
 # ==========================================================
 # ==========================================================
 # HouseUnity Provision Script
@@ -612,7 +634,7 @@ show_access_info() {
     BACKEND_PORT=${BACKEND_PORT:-8080}
     FRONTEND_PORT=${FRONTEND_PORT:-5173}
     
-    log "📍 Accede a tu aplicación desde tu navegador (Windows/otro PC):"
+    log " Accede a tu aplicación desde tu navegador (Windows/otro PC):"
     log ""
     
     # Detectar si es NAT o Bridge
@@ -634,14 +656,21 @@ show_access_info() {
     fi
     
     log ""
-    log "📊 Comandos útiles desde SSH:"
+    log " Comandos útiles desde SSH:"
     log "   • Ver logs:       docker compose logs -f"
     log "   • Ver estado:     docker compose ps"
     log "   • Reiniciar:      docker compose restart"
     log "   • Detener:        docker compose down"
     log "   • Reconstruir:    docker compose up --build -d"
     log ""
-    log "🔍 Probar desde Rocky Linux:"
+    log "Configurar Sistema de Respaldo:"
+    log "   Los paquetes NFS y rsync ya están instalados."
+    log "   Para configurar el sistema de respaldo, ejecuta:"
+    log ""
+    log "   cd $PROJECT_DIR"
+    log "   sudo bash scripts/setup-backup.sh"
+    log ""
+    log " Probar desde Rocky Linux:"
     log "   • curl http://localhost:$BACKEND_PORT"
     log "   • docker ps"
     log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT'"
@@ -664,6 +693,7 @@ main() {
     install_basic_tools
     install_docker
     install_docker_compose
+    install_backup_packages
     setup_ssh
     setup_github_ssh
     
