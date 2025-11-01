@@ -475,6 +475,7 @@ setup_github_ssh() {
     local SSH_PUB_KEY_PATH="$USER_HOME/.ssh/id_rsa.pub"
 
     mkdir -p "$USER_HOME/.ssh"
+    chown "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$USER_HOME/.ssh"
     chmod 700 "$USER_HOME/.ssh"
 
     if [ -f "$SSH_KEY_PATH" ]; then
