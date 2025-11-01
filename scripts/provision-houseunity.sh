@@ -311,11 +311,29 @@ setup_backup_system() {
     # 3. Configurar NFS exports
     log "Configurando NFS exports..."
     local NFS_EXPORTS="/etc/exports"
-    if ! grep -q "/export" "$NFS_EXPORTS" 2>/dev/null; then
-        echo "/export *(rw,sync,no_subtree_check,no_root_squash)" | sudo tee -a "$NFS_EXPORTS" > /dev/null
-        log "✓ /export agregado a $NFS_EXPORTS"
+    
+    # Hacer backup del archivo original si existe
+    if [ -f "$NFS_EXPORTS" ]; then
+        sudo cp "$NFS_EXPORTS" "${NFS_EXPORTS}.bak" 2>/dev/null || true
     fi
-    sudo exportfs -ra
+    
+    # Eliminar entradas previas de /export si existen
+    sudo sed -i '/\/export/d' "$NFS_EXPORTS" 2>/dev/null || true
+    
+    # Agregar nueva entrada con formato correcto
+    echo "/export *(rw,sync,no_subtree_check,no_root_squash)" | sudo tee -a "$NFS_EXPORTS" > /dev/null
+    log "✓ /export configurado en $NFS_EXPORTS"
+    
+    # Aplicar configuración con manejo de errores
+    if sudo exportfs -ra 2>/dev/null; then
+        log "✓ NFS exports aplicados correctamente"
+    else
+        warn "Hubo un problema al aplicar NFS exports. Verificando..."
+        # Mostrar contenido del archivo para debug
+        sudo cat "$NFS_EXPORTS"
+        # Intentar aplicar solo /export específicamente
+        sudo exportfs -o rw,sync,no_subtree_check,no_root_squash *:/export 2>/dev/null || true
+    fi
     
     # 4. Habilitar e iniciar NFS
     case "$OS" in
@@ -512,52 +530,31 @@ clone_repository() {
             return 1
         fi
 
-        # Cambiar al directorio y validar
-        if ! cd "$target_dir"; then
-            error "No se puede acceder al directorio '$target_dir'"
-            return 1
-        fi
-
-        # Configurar permisos antes de actualizar
-        log "Configurando permisos del repositorio..."
         sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
+        cd "$target_dir"
 
         # Detectar rama principal automáticamente
         local default_branch
-        if ! default_branch=$(sudo -u "$EFFECTIVE_USER" git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}'); then
-            warn "No se pudo detectar la rama principal. Usando 'main'..."
-            default_branch="main"
-        fi
-        log "Rama principal: $default_branch"
+        default_branch=$(git remote show origin | awk '/HEAD branch/ {print $NF}')
+        log "Rama principal detectada: $default_branch"
 
-        # Intentar actualizar el repositorio
-        log "Actualizando repositorio desde origin/$default_branch..."
-        if sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"; then
-            log "✓ Repositorio actualizado correctamente"
-        else
-            error "Fallo al actualizar el repositorio. Verifica conflictos o problemas de conexión."
-            return 1
-        fi
+        sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"
     else
         log "Clonando repositorio en nuevo directorio..."
-        if ! sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
+        if sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
+            cd "$target_dir"
+        else
             error "Fallo al clonar el repositorio. Verifica la URL y los permisos."
-            return 1
-        fi
-        
-        # Cambiar al directorio y validar
-        if ! cd "$target_dir"; then
-            error "No se puede acceder al directorio clonado '$target_dir'"
             return 1
         fi
     fi
 
-    log "Configurando permisos finales del repositorio..."
+    log "Configurando permisos del repositorio..."
     sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
     find . -type d -exec chmod 755 {} \;
     find . -type f -exec chmod 644 {} \;
 
-    log "✓ Repositorio clonado/actualizado en: $target_dir"
+    log "Repositorio clonado/actualizado en: $target_dir"
 }
 
 
