@@ -80,7 +80,11 @@ load_or_prompt_config() {
 unset PROJECT_DIR
 
 REPO_NAME=$(basename "$REPO_URL" .git)
-DEFAULT_DIR="$HOME/$REPO_NAME"
+local EFFECTIVE_USER="${SUDO_USER:-$USER}"
+local USER_HOME
+USER_HOME="$(getent passwd "$EFFECTIVE_USER" | cut -d: -f6)"
+DEFAULT_DIR="$USER_HOME/$REPO_NAME"
+
 
 while [ -z "$PROJECT_DIR" ]; do
     read -r -p "Introduce el directorio de instalación: [$DEFAULT_DIR] " input_dir
