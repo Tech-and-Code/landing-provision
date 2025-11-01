@@ -746,26 +746,60 @@ setup_mysql_replication() {
     
     # Primero verificar que podemos conectarnos
     info "Verificando credenciales de MySQL Master..."
-    if ! docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" > /dev/null 2>&1; then
+    
+    # Intentar conectar y capturar el error completo
+    TEST_RESULT=$(docker exec houseunity-mysql-master mysql -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" 2>&1)
+    TEST_EXIT_CODE=$?
+    
+    if [ $TEST_EXIT_CODE -ne 0 ]; then
         echo ""
-        warn "⚠️  No se puede conectar a MySQL Master con MYSQL_ROOT_PASSWORD del .env"
+        warn "⚠️  No se puede conectar a MySQL Master"
         echo ""
-        echo "Contraseña en .env:       ${MYSQL_ROOT_PASSWORD}"
-        echo "Contraseña del contenedor: $(docker exec houseunity-mysql-master printenv MYSQL_ROOT_PASSWORD 2>/dev/null || echo 'NO DISPONIBLE')"
+        echo "Contraseña en .env:       '${MYSQL_ROOT_PASSWORD}'"
+        echo "Contraseña del contenedor: '$(docker exec houseunity-mysql-master printenv MYSQL_ROOT_PASSWORD 2>/dev/null || echo 'NO DISPONIBLE')'"
         echo ""
-        warn "SOLUCIÓN: Actualiza el .env con la contraseña correcta del contenedor:"
+        echo "===== ERROR DE MYSQL ====="
+        echo "$TEST_RESULT"
+        echo "=========================="
         echo ""
-        echo "1. Editar .env:"
-        echo "   nano .env"
+        
+        # Diagnóstico adicional
+        info "Diagnóstico adicional:"
+        echo "1. Estado del contenedor:"
+        docker ps | grep houseunity-mysql-master || echo "   Contenedor no encontrado"
         echo ""
-        echo "2. Cambiar la línea MYSQL_ROOT_PASSWORD a:"
-        echo "   MYSQL_ROOT_PASSWORD=$(docker exec houseunity-mysql-master printenv MYSQL_ROOT_PASSWORD 2>/dev/null)"
+        echo "2. Intentando con mysqladmin:"
+        docker exec houseunity-mysql-master mysqladmin -u root -p"${MYSQL_ROOT_PASSWORD}" ping 2>&1
         echo ""
-        echo "3. Guardar (Ctrl+O, Enter, Ctrl+X) y volver a ejecutar el script"
+        echo "3. Verificando si MySQL está listo:"
+        docker exec houseunity-mysql-master mysqladmin ping 2>&1
         echo ""
+        
+        # Posibles soluciones
+        warn "POSIBLES CAUSAS Y SOLUCIONES:"
+        echo ""
+        echo "A) MySQL aún no ha terminado de inicializar:"
+        echo "   - Espera 30 segundos más y vuelve a ejecutar el script"
+        echo "   - Verifica logs: docker logs houseunity-mysql-master"
+        echo ""
+        echo "B) Contraseña tiene caracteres especiales o espacios:"
+        echo "   - Verifica: cat .env | grep MYSQL_ROOT_PASSWORD | cat -A"
+        echo "   - Debe ser exactamente: MYSQL_ROOT_PASSWORD=ILHFH8.pp (sin espacios)"
+        echo ""
+        echo "C) El contenedor está reiniciándose:"
+        echo "   - Verifica: docker ps -a | grep mysql-master"
+        echo "   - Si dice 'Restarting', hay un problema con el contenedor"
+        echo ""
+        
         warn "Saltando configuración de replicación MySQL..."
+        echo "Puedes configurarla manualmente más tarde con:"
+        echo "  cd ~/Tech-Code-Proyecto/docker/scripts"
+        echo "  ./setup-replication.sh"
+        echo ""
         return 1
     fi
+    
+    log "✓ Conexión a MySQL Master exitosa"
     
     until docker exec houseunity-mysql-master mysqladmin ping -h localhost -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
         attempt=$((attempt + 1))
