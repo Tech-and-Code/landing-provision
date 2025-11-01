@@ -263,6 +263,7 @@ install_docker_compose() {
     log "Docker Compose Standalone (v2) instalado correctamente como 'docker-compose'"
 }
 # ==========================================================
+# ==========================================================
 # HouseUnity Provision Script
 # Version: 1.4.2 (2025-10-31)
 # Author: Tech-and-Code
@@ -290,6 +291,7 @@ toggle_ssh_password_auth() {
 
     sudo systemctl restart sshd || sudo systemctl restart ssh
 }
+
 
 # Función para configurar SSH
 setup_ssh() {
@@ -357,25 +359,29 @@ setup_github_ssh() {
         ssh -T git@github.com || warn "No se pudo verificar la conexión con GitHub todavía."
     fi
 
-    # --- NUEVO BLOQUE: Copiar clave pública automáticamente al host Windows ---
+      # --- BLOQUE CORREGIDO: Copiar clave pública automáticamente al host Windows ---
     read -r -p "¿Deseas copiar automáticamente la clave pública a tu máquina anfitriona Windows? (s/n): " copy_choice
     if [[ "$copy_choice" =~ ^[sS]$ ]]; then
-        toggle_ssh_password_auth on
-
         read -r -p "Introduce la IP de tu máquina Windows (ej. 192.168.1.151): " WIN_IP
         read -r -p "Introduce tu usuario de Windows (ej. MIMI ESTUDIOS): " WIN_USER
 
-        log "Intentando crear carpeta .ssh en Windows..."
-        ssh -o StrictHostKeyChecking=no "$WIN_USER@$WIN_IP" 'powershell -Command "New-Item -ItemType Directory -Force -Path $env:USERPROFILE\.ssh"'
+        toggle_ssh_password_auth enable
 
-        log "Copiando clave pública a Windows..."
-        scp -o StrictHostKeyChecking=no "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:/c/Users/$WIN_USER/.ssh/authorized_keys"
+        log "Intentando copiar clave pública con scp..."
+        if scp -o StrictHostKeyChecking=no "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:\"C:\\Users\\$WIN_USER\\.ssh\\authorized_keys\""; then
+            log "✅ Clave pública copiada correctamente a tu Windows host."
+        else
+            warn "⚠️ No se pudo copiar la clave pública automáticamente."
+            warn "Copia manualmente desde la VM con:"
+            echo -e "${YELLOW}scp $SSH_PUB_KEY_PATH \"$WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\\"${NC}"
+        fi
 
-        log "Ajustando permisos en Windows..."
-        ssh "$WIN_USER@$WIN_IP" 'powershell -Command "icacls $env:USERPROFILE\.ssh /grant $env:USERNAME:(OI)(CI)F; icacls $env:USERPROFILE\.ssh\authorized_keys /grant $env:USERNAME:F"'
+        toggle_ssh_password_auth disable
+        log "SSH restaurado correctamente (solo autenticación por clave)."
+    else
+        info "Omitido: no se copió la clave a Windows."
+    fi
 
-        toggle_ssh_password_auth off
-        log "Clave pública copiada correctamente y SSH asegurado nuevamente."
     else
         info "Omitido: no se copió la clave a Windows."
     fi
