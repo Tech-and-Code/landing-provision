@@ -397,7 +397,6 @@ setup_github_ssh() {
 }
 
 
-# Función para clonar el repositorio
 clone_repository() {
     local repo_url=$1
     local target_dir=$2
@@ -406,6 +405,7 @@ clone_repository() {
 
     if [ -d "$target_dir" ]; then
         warn "El directorio '$target_dir' ya existe. Intentando actualizar..."
+
         if [ ! -d "$target_dir/.git" ]; then
             error "El directorio existe pero no es un repositorio git. Borra '$target_dir' para continuar."
             return 1
@@ -413,7 +413,12 @@ clone_repository() {
 
         sudo chown -R "$USER":"$USER" "$target_dir"
         cd "$target_dir"
-        git pull origin main || git pull origin master
+
+        # Detectar rama principal automáticamente
+        local default_branch
+        default_branch=$(git remote show origin | awk '/HEAD branch/ {print $NF}')
+        log "Rama principal detectada: $default_branch"
+        git pull origin "$default_branch"
     else
         log "Clonando repositorio en nuevo directorio..."
         if git clone "$repo_url" "$target_dir"; then
@@ -430,6 +435,7 @@ clone_repository() {
 
     log "Repositorio clonado/actualizado en: $target_dir"
 }
+
 
 
 # Función para validar estructura del proyecto HouseUnity
