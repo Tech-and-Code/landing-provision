@@ -76,14 +76,31 @@ load_or_prompt_config() {
     REPO_NAME=$(basename "$REPO_URL" .git)
     DEFAULT_DIR="$HOME/$REPO_NAME"
 
-    # 3. Definir el directorio de instalación
-    while [ -z "$PROJECT_DIR" ]; do
-        read -r -p "Introduce el directorio de instalación: [$DEFAULT_DIR] " input_dir
-        PROJECT_DIR=${input_dir:-$DEFAULT_DIR}
-        if [ -z "$PROJECT_DIR" ]; then
-             warn "El directorio de proyecto es obligatorio."
-        fi
-    done
+    # 3. Definir el directorio de instalación (siempre preguntar)
+unset PROJECT_DIR
+
+REPO_NAME=$(basename "$REPO_URL" .git)
+DEFAULT_DIR="$HOME/$REPO_NAME"
+
+while [ -z "$PROJECT_DIR" ]; do
+    read -r -p "Introduce el directorio de instalación: [$DEFAULT_DIR] " input_dir
+    PROJECT_DIR=${input_dir:-$DEFAULT_DIR}
+
+    # Detectar si el destino es el HOME del usuario
+    local EFFECTIVE_USER="${SUDO_USER:-$USER}"
+    local USER_HOME
+    USER_HOME="$(getent passwd "$EFFECTIVE_USER" | cut -d: -f6)"
+
+    if [ "$PROJECT_DIR" = "$USER_HOME" ]; then
+        warn "El destino es el directorio HOME del usuario. Creando subcarpeta '$REPO_NAME'..."
+        PROJECT_DIR="$USER_HOME/$REPO_NAME"
+    fi
+
+    if [ -z "$PROJECT_DIR" ]; then
+        warn "El directorio de proyecto es obligatorio."
+    fi
+done
+
     
     # 4. Guardar la configuración para la próxima vez
     log "Guardando configuración en $CONFIG_FILE..."
