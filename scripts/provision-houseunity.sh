@@ -849,7 +849,7 @@ setup_mysql_replication() {
     # Mostrar el error completo para diagnóstico
     echo "Ejecutando: CREATE USER IF NOT EXISTS 'repl_user'@'%'..."
     if docker exec houseunity-mysql-master mysql --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" -e \
-        "CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';" 2>&1; then
+        "CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2025';" 2>&1; then
         log "✓ Usuario de replicación creado/verificado"
     else
         ERROR_CODE=$?
@@ -892,7 +892,7 @@ setup_mysql_replication() {
     CHANGE MASTER TO 
         MASTER_HOST='mysql',
         MASTER_USER='repl_user',
-        MASTER_PASSWORD='Repl1c@2024',
+        MASTER_PASSWORD='Repl1c@2025',
         MASTER_LOG_FILE='$MASTER_LOG_FILE',
         MASTER_LOG_POS=$MASTER_LOG_POS;
     START SLAVE;
