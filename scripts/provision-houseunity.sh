@@ -262,6 +262,34 @@ install_docker_compose() {
     
     log "Docker Compose Standalone (v2) instalado correctamente como 'docker-compose'"
 }
+# ==========================================================
+# HouseUnity Provision Script
+# Version: 1.4.2 (2025-10-31)
+# Author: Tech-and-Code
+# Description:
+#   - Corrige toggle_ssh_password_auth faltante
+#   - Permite copiar clave pública Windows temporalmente
+#   - Compatible con Rocky Linux / Ubuntu / Debian
+# ==========================================================
+
+# Función auxiliar para activar/desactivar autenticación por contraseña en SSH temporalmente
+toggle_ssh_password_auth() {
+    local action=$1
+    local ssh_config="/etc/ssh/sshd_config"
+
+    if [[ "$action" == "enable" ]]; then
+        echo "🔓 Habilitando temporalmente autenticación por contraseña..."
+        sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$ssh_config"
+    elif [[ "$action" == "disable" ]]; then
+        echo "🔒 Deshabilitando autenticación por contraseña..."
+        sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$ssh_config"
+    else
+        echo "Uso: toggle_ssh_password_auth <enable|disable>"
+        return 1
+    fi
+
+    sudo systemctl restart sshd || sudo systemctl restart ssh
+}
 
 # Función para configurar SSH
 setup_ssh() {
