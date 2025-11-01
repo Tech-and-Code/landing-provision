@@ -401,32 +401,36 @@ setup_github_ssh() {
 clone_repository() {
     local repo_url=$1
     local target_dir=$2
-    
+
     log "Clonando repositorio: $repo_url en $target_dir"
-    
+
     if [ -d "$target_dir" ]; then
         warn "El directorio '$target_dir' ya existe. Intentando actualizar..."
         if [ ! -d "$target_dir/.git" ]; then
-             error "El directorio existe pero no es un repositorio git. Borra '$target_dir' para continuar."
+            error "El directorio existe pero no es un repositorio git. Borra '$target_dir' para continuar."
+            return 1
         fi
-        
+
         sudo chown -R "$USER":"$USER" "$target_dir"
         cd "$target_dir"
-        git pull origin main || git pull origin master 
+        git pull origin main || git pull origin master
     else
-        log "Creando directorio y clonando repositorio..."
-        sudo mkdir -p "$target_dir"
-        sudo chown "$USER":"$USER" "$target_dir"
-        git clone "$repo_url" "$target_dir"
-        cd "$target_dir"
+        log "Clonando repositorio en nuevo directorio..."
+        if git clone "$repo_url" "$target_dir"; then
+            cd "$target_dir"
+        else
+            error "Fallo al clonar el repositorio. Verifica la URL y los permisos."
+            return 1
+        fi
     fi
-    
+
     log "Configurando permisos del repositorio..."
     find . -type d -exec chmod 755 {} \;
     find . -type f -exec chmod 644 {} \;
-    
+
     log "Repositorio clonado/actualizado en: $target_dir"
 }
+
 
 # Función para validar estructura del proyecto HouseUnity
 validate_project_structure() {
