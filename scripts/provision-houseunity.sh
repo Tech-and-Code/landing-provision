@@ -769,10 +769,10 @@ setup_mysql_replication() {
         docker ps | grep houseunity-mysql-master || echo "   Contenedor no encontrado"
         echo ""
         echo "2. Intentando con mysqladmin:"
-        docker exec houseunity-mysql-master mysqladmin -u root -p"${MYSQL_ROOT_PASSWORD}" ping 2>&1
+        docker exec houseunity-mysql-master mysqladmin --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" ping 2>&1
         echo ""
         echo "3. Verificando si MySQL está listo:"
-        docker exec houseunity-mysql-master mysqladmin ping 2>&1
+        docker exec houseunity-mysql-master mysqladmin --protocol=TCP ping 2>&1
         echo ""
         
         # Posibles soluciones
@@ -801,7 +801,7 @@ setup_mysql_replication() {
     
     log "✓ Conexión a MySQL Master exitosa"
     
-    until docker exec houseunity-mysql-master mysqladmin ping -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
+    until docker exec houseunity-mysql-master mysqladmin ping --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
         attempt=$((attempt + 1))
         if [ $attempt -ge $max_attempts ]; then
             error "MySQL Master no está respondiendo después de $max_attempts intentos"
@@ -813,7 +813,7 @@ setup_mysql_replication() {
     # Esperar a que MySQL Slave esté listo
     info "Esperando que MySQL Slave esté disponible..."
     attempt=0
-    until docker exec houseunity-mysql-slave mysqladmin ping -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
+    until docker exec houseunity-mysql-slave mysqladmin ping --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
         attempt=$((attempt + 1))
         if [ $attempt -ge $max_attempts ]; then
             error "MySQL Slave no está respondiendo después de $max_attempts intentos"
