@@ -724,10 +724,13 @@ setup_mysql_replication() {
     fi
     
     # Cargar variables de entorno
+   # Cargar variables de entorno desde .env
     if [ -f .env ]; then
-        export $(grep -v '^#' .env | xargs 2>/dev/null)
+        set -a  # Marcar todas las variables para export
+        source <(grep -E '^[A-Z_]+=.*' .env | grep -v '^#')
+        set +a  # Desactivar auto-export
     else
-        error "Archivo .env no encontrado"
+       error "Archivo .env no encontrado"
     fi
     
     # Esperar a que MySQL Master esté listo
