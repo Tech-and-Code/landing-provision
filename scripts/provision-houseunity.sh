@@ -491,26 +491,53 @@ setup_github_ssh() {
     echo -e "${YELLOW}"
     sudo -u "$EFFECTIVE_USER" cat "$SSH_PUB_KEY_PATH"
     echo -e "${NC}"
-
-    # --- NUEVO BLOQUE: Copiar clave pública automáticamente al host Windows ---
-    read -r -p "¿Deseas copiar automáticamente la clave pública a tu máquina anfitriona Windows? (s/n): " copy_choice
-    if [[ "$copy_choice" =~ ^[sS]$ ]]; then
-        read -r -p "Introduce la IP de tu máquina Windows: " WIN_IP
-        read -r -p "Introduce tu usuario de Windows (por ejemplo: Usuario): " WIN_USER
-
-        local WIN_SSH_DIR="/mnt/c/Users/$WIN_USER/.ssh"
-
-        log "Intentando copiar clave pública con scp..."
-        if sudo -u "$EFFECTIVE_USER" scp "$SSH_PUB_KEY_PATH" "$WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\houseunity_vm_id_rsa.pub"; then
-            log "Clave pública copiada correctamente a tu Windows host."
-        else
-            warn "No se pudo copiar la clave pública automáticamente. Hazlo manualmente."
-            warn "Ejemplo: scp $SSH_PUB_KEY_PATH $WIN_USER@$WIN_IP:C:\\Users\\$WIN_USER\\.ssh\\"
-        fi
+    echo ""
+    
+    # Detectar la IP de la VM
+    VM_IP=$(ip addr show | grep "inet " | grep -v "127.0.0.1" | awk '{print $2}' | cut -d/ -f1 | head -1)
+    
+    info "📋 Para copiar la clave SSH desde Windows:"
+    echo ""
+    echo "   Habilitar SSH con contraseña temporalmente (ejecuta en la VM):"
+    echo -e "${YELLOW}   sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config${NC}"
+    echo -e "${YELLOW}   sudo systemctl restart sshd${NC}"
+    echo ""
+    echo "   Desde Windows (Git Bash), ejecuta:"
+    echo -e "${YELLOW}   scp $EFFECTIVE_USER@$VM_IP:~/.ssh/id_rsa.pub ~/.ssh/houseunity_vm.pub${NC}"
+    echo -e "${YELLOW}   cat ~/.ssh/houseunity_vm.pub${NC}"
+    echo ""
+    echo "   Después de copiar, deshabilitar password SSH (ejecuta en la VM):"
+    echo -e "${YELLOW}   sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config${NC}"
+    echo -e "${YELLOW}   sudo systemctl restart sshd${NC}"
+    echo ""
+    
+    read -r -p "¿Quieres que el script habilite password SSH temporalmente para que copies la clave? (s/n): " enable_pwd
+    if [[ "$enable_pwd" =~ ^[sS]$ ]]; then
+        log "Habilitando autenticación por contraseña temporalmente..."
+        sudo sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+        sudo systemctl restart sshd
+        
+        echo ""
+        warn "⚠️  Autenticación por contraseña HABILITADA temporalmente"
+        echo ""
+        echo "Desde Windows (Git Bash), ejecuta:"
+        echo -e "${YELLOW}   scp $EFFECTIVE_USER@$VM_IP:~/.ssh/id_rsa.pub ~/.ssh/houseunity_vm.pub${NC}"
+        echo -e "${YELLOW}   cat ~/.ssh/houseunity_vm.pub${NC}"
+        echo ""
+        echo "Copia la clave y agrégala a GitHub (Settings → SSH and GPG keys → New SSH key)"
+        echo ""
+        read -r -p "Presiona Enter cuando hayas copiado la clave y la hayas agregado a GitHub..."
+        
+        log "Deshabilitando autenticación por contraseña..."
+        sudo sed -i 's/^PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+        sudo systemctl restart sshd
+        log "✓ Autenticación por contraseña deshabilitada"
+    else
+        echo ""
+        log "Agrega la clave pública a tu cuenta de GitHub (Settings → SSH and GPG keys → New SSH key)"
+        echo "Puedes copiar la clave desde arriba (la línea amarilla que empieza con ssh-rsa)"
+        read -r -p "Presiona Enter cuando la hayas agregado..."
     fi
-
-    log "Agrega la clave pública a tu cuenta de GitHub (Settings → SSH and GPG keys → New SSH key)"
-    read -r -p "Presiona Enter cuando la hayas agregado..."
 
     log "Probando conexión SSH con GitHub..."
     sudo -u "$EFFECTIVE_USER" ssh -T git@github.com || true
