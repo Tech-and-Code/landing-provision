@@ -247,9 +247,17 @@ install_docker() {
             ;;
     esac
 
-    if [ -n "$USER" ] && ! id -nG "$USER" | grep -qw "docker"; then
-        log "Agregando usuario '$USER' al grupo 'docker'. Necesitarás cerrar sesión y volver a entrar."
-        sudo usermod -aG docker "$USER"
+    # Detectar el usuario real (el que ejecutó sudo)
+    local EFFECTIVE_USER="${SUDO_USER:-$USER}"
+    
+    if [ -n "$EFFECTIVE_USER" ] && [ "$EFFECTIVE_USER" != "root" ]; then
+        if ! id -nG "$EFFECTIVE_USER" | grep -qw "docker"; then
+            log "Agregando usuario '$EFFECTIVE_USER' al grupo 'docker'..."
+            sudo usermod -aG docker "$EFFECTIVE_USER"
+            log "✓ Usuario '$EFFECTIVE_USER' agregado al grupo docker"
+        else
+            log "Usuario '$EFFECTIVE_USER' ya está en el grupo docker"
+        fi
     fi
     
     sudo systemctl enable docker
@@ -525,38 +533,109 @@ clone_repository() {
     log "Clonando repositorio: $repo_url en $target_dir"
 
     if [ -d "$target_dir" ]; then
-        warn "El directorio '$target_dir' ya existe. Intentando actualizar..."
+        # El directorio existe, verificar si está vacío
+        if [ -z "$(ls -A "$target_dir" 2>/dev/null)" ]; then
+            # Directorio vacío, clonar directamente
+            log "Directorio existe pero está vacío. Clonando repositorio..."
+            if sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
+                cd "$target_dir"
+            else
+                error "Fallo al clonar el repositorio. Verifica la URL y los permisos SSH."
+                return 1
+            fi
+        elif [ -d "$target_dir/.git" ]; then
+            # Es un repositorio git existente, actualizar
+            warn "El directorio '$target_dir' ya contiene un repositorio git. Actualizando..."
+            
+            sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
+            
+            if ! cd "$target_dir"; then
+                error "No se puede acceder al directorio '$target_dir'"
+                return 1
+            fi
 
-        if [ ! -d "$target_dir/.git" ]; then
-            error "El directorio existe pero no es un repositorio git. Borra '$target_dir' para continuar."
-            return 1
+            # Detectar rama principal automáticamente
+            local default_branch
+            if ! default_branch=$(sudo -u "$EFFECTIVE_USER" git remote show origin 2>/dev/null | awk '/HEAD branch/ {print $NF}'); then
+                warn "No se pudo detectar la rama principal. Usando 'main'..."
+                default_branch="main"
+            fi
+            log "Rama principal: $default_branch"
+
+            # Intentar actualizar el repositorio
+            log "Actualizando repositorio desde origin/$default_branch..."
+            if sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"; then
+                log "✓ Repositorio actualizado correctamente"
+            else
+                error "Fallo al actualizar el repositorio. Verifica conflictos o problemas de conexión."
+                return 1
+            fi
+        else
+            # Directorio tiene archivos pero no es un repo git
+            warn "El directorio '$target_dir' existe y contiene archivos pero NO es un repositorio git."
+            echo ""
+            echo "Contenido actual del directorio:"
+            ls -la "$target_dir" | head -10
+            echo ""
+            echo "Opciones:"
+            echo "1. Borrar todo y clonar el repositorio (CUIDADO: borrará archivos)"
+            echo "2. Clonar en un subdirectorio temporal y mover después"
+            echo "3. Cancelar y resolver manualmente"
+            echo ""
+            read -r -p "¿Qué deseas hacer? (1/2/3): " choice
+            
+            case $choice in
+                1)
+                    warn "Borrando contenido de $target_dir..."
+                    sudo rm -rf "$target_dir"/*
+                    sudo rm -rf "$target_dir"/.[!.]*
+                    log "Clonando repositorio en directorio limpio..."
+                    if sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
+                        cd "$target_dir"
+                    else
+                        error "Fallo al clonar el repositorio."
+                        return 1
+                    fi
+                    ;;
+                2)
+                    local temp_dir="${target_dir}_temp_clone"
+                    log "Clonando en directorio temporal: $temp_dir"
+                    if sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$temp_dir"; then
+                        warn "Repositorio clonado en: $temp_dir"
+                        warn "Revisa manualmente y mueve los archivos necesarios a: $target_dir"
+                        cd "$temp_dir"
+                    else
+                        error "Fallo al clonar el repositorio."
+                        return 1
+                    fi
+                    ;;
+                3)
+                    error "Operación cancelada. Limpia el directorio '$target_dir' manualmente y vuelve a ejecutar."
+                    return 1
+                    ;;
+                *)
+                    error "Opción inválida. Operación cancelada."
+                    return 1
+                    ;;
+            esac
         fi
-
-        sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
-        cd "$target_dir"
-
-        # Detectar rama principal automáticamente
-        local default_branch
-        default_branch=$(git remote show origin | awk '/HEAD branch/ {print $NF}')
-        log "Rama principal detectada: $default_branch"
-
-        sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"
     else
-        log "Clonando repositorio en nuevo directorio..."
+        # El directorio no existe, crear y clonar
+        log "Creando directorio y clonando repositorio..."
         if sudo -u "$EFFECTIVE_USER" git clone "$repo_url" "$target_dir"; then
             cd "$target_dir"
         else
-            error "Fallo al clonar el repositorio. Verifica la URL y los permisos."
+            error "Fallo al clonar el repositorio. Verifica la URL y los permisos SSH."
             return 1
         fi
     fi
 
     log "Configurando permisos del repositorio..."
     sudo chown -R "$EFFECTIVE_USER":"$EFFECTIVE_USER" "$target_dir"
-    find . -type d -exec chmod 755 {} \;
-    find . -type f -exec chmod 644 {} \;
+    find "$target_dir" -type d -exec chmod 755 {} \; 2>/dev/null || true
+    find "$target_dir" -type f -exec chmod 644 {} \; 2>/dev/null || true
 
-    log "Repositorio clonado/actualizado en: $target_dir"
+    log "✓ Repositorio listo en: $target_dir"
 }
 
 
@@ -612,7 +691,7 @@ setup_project() {
             sed -i 's/SECURE_COOKIES=false/SECURE_COOKIES=true/g' .env
             sed -i 's|APP_URL=http://localhost:8080|APP_URL=https://tu-dominio.com|g' .env
             
-            warn "IMPORTANTE: Revisa y actualiza las credenciales de email y dominio en .env"
+            warn "IMPORTANTE: Revisar y actualizar las credenciales de email y dominio en .env"
             info "Password de BD generado: $DB_PASS"
             info "Password de Root generado: $ROOT_PASS"
         else
@@ -712,7 +791,7 @@ setup_project() {
 
 # Función para configurar replicación MySQL Master-Slave
 setup_mysql_replication() {
-    log "🔄 Configurando replicación MySQL Master-Slave..."
+    log " Configurando replicación MySQL Master-Slave..."
     
     # Verificar que los contenedores estén corriendo
     if ! docker ps | grep -q "houseunity-mysql-master"; then
@@ -914,7 +993,7 @@ setup_mysql_replication() {
     SECONDS_BEHIND=$(echo "$SLAVE_STATUS" | grep "Seconds_Behind_Master:" | awk '{print $2}')
     
     log ""
-    log "📊 Estado de la Replicación:"
+    log "Estado de la Replicación:"
     log "   • Slave_IO_Running: $IO_RUNNING"
     log "   • Slave_SQL_Running: $SQL_RUNNING"
     log "   • Seconds_Behind_Master: $SECONDS_BEHIND"
@@ -923,7 +1002,7 @@ setup_mysql_replication() {
     if [ "$IO_RUNNING" == "Yes" ] && [ "$SQL_RUNNING" == "Yes" ]; then
         log "✅ ¡Replicación MySQL Master-Slave configurada exitosamente!"
         log ""
-        log "📌 Información de la replicación:"
+        log " Información de la replicación:"
         log "   • Master: localhost:3307 (houseunity-mysql-master)"
         log "   • Slave:  localhost:3308 (houseunity-mysql-slave)"
         log "   • Base de datos: ${DB_NAME}"
@@ -975,14 +1054,14 @@ show_access_info() {
     fi
     
     log ""
-    log "📊 Comandos útiles desde SSH:"
+    log " Comandos útiles desde SSH:"
     log "   • Ver logs:       docker compose logs -f"
     log "   • Ver estado:     docker compose ps"
     log "   • Reiniciar:      docker compose restart"
     log "   • Detener:        docker compose down"
     log "   • Reconstruir:    docker compose up --build -d"
     log ""
-    log "💾 Sistema de Respaldo:"
+    log " Sistema de Respaldo:"
     log "   • Directorio:     /export"
     log "   • Puerto rsync HOST:      873"
     log "   • Puerto rsync Docker:    8873"
@@ -993,7 +1072,7 @@ show_access_info() {
     log "   echo 'CONTRASEÑA' > rsync.pass && chmod 600 rsync.pass"
     log "   rsync -av --port=873 --password-file=rsync.pass archivo.txt backupuser@$VM_IP::backups"
     log ""
-    log "� Replicación MySQL Master-Slave:"
+    log " Replicación MySQL Master-Slave:"
     log "   • Master (R/W):   mysql://$VM_IP:3307"
     log "   • Slave (R):      mysql://$VM_IP:3308"
     log ""
@@ -1001,7 +1080,7 @@ show_access_info() {
     log "   cd ~/Tech-Code-Proyecto/docker/scripts"
     log "   ./check-replication.sh"
     log ""
-    log "🔍 Probar desde Rocky Linux:"
+    log " Probar desde Rocky Linux:"
     log "   • curl http://localhost:$BACKEND_PORT"
     log "   • docker ps"
     log "   • ss -tulpn | grep -E '$BACKEND_PORT|$FRONTEND_PORT|873|8873|3307|3308'"
