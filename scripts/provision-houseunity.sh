@@ -404,17 +404,6 @@ setup_backup_system() {
     log "✓ Sistema de respaldo configurado correctamente"
 }
 
-# ==========================================================
-# ==========================================================
-# HouseUnity Provision Script
-# Version: 1.4.2 (2025-10-31)
-# Author: Tech-and-Code
-# Description:
-#   - Corrige toggle_ssh_password_auth faltante
-#   - Permite copiar clave pública Windows temporalmente
-#   - Compatible con Rocky Linux / Ubuntu / Debian
-# ==========================================================
-
 # Función auxiliar para activar/desactivar autenticación por contraseña en SSH temporalmente
 toggle_ssh_password_auth() {
     local action=$1
