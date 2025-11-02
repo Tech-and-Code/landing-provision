@@ -802,9 +802,73 @@ setup_project() {
         "$DOCKER_COMPOSE_CMD" up --build -d
     fi
     
-    # 7. Esperar que MySQL esté listo
-    log "Esperando que MySQL esté listo..."
+    # 7. Esperar que MySQL esté completamente listo
+    log "Esperando que MySQL complete la inicialización (esto puede tomar 1-2 minutos)..."
+    
+    # Esperar a que los contenedores estén "Up"
+    info "Verificando que los contenedores estén corriendo..."
     sleep 10
+    
+    # Esperar específicamente a que MySQL Master termine de inicializar
+    info "Esperando que MySQL Master complete los scripts de inicialización..."
+    local mysql_ready=false
+    local max_wait=120  # 2 minutos máximo
+    local elapsed=0
+    
+    while [ $elapsed -lt $max_wait ]; do
+        # Verificar si MySQL acepta conexiones y si terminó de ejecutar scripts de init
+        if docker exec houseunity-mysql-master mysqladmin -h 127.0.0.1 --protocol=TCP ping --silent 2>/dev/null; then
+            # MySQL responde, verificar si terminó la inicialización viendo los logs
+            local last_log=$(docker logs houseunity-mysql-master --tail 5 2>/dev/null)
+            
+            # Buscar indicadores de que terminó la inicialización
+            if echo "$last_log" | grep -q "ready for connections" && \
+               ! echo "$last_log" | grep -q "Entrypoint"; then
+                mysql_ready=true
+                break
+            fi
+        fi
+        
+        echo -n "."
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+    
+    echo ""
+    
+    if [ "$mysql_ready" = true ]; then
+        log "✓ MySQL Master está completamente listo"
+    else
+        warn "MySQL Master puede no estar completamente listo. Esperando 20 segundos adicionales..."
+        sleep 20
+    fi
+    
+    # Hacer lo mismo para MySQL Slave
+    info "Esperando que MySQL Slave complete la inicialización..."
+    mysql_ready=false
+    elapsed=0
+    
+    while [ $elapsed -lt $max_wait ]; do
+        if docker exec houseunity-mysql-slave mysqladmin -h 127.0.0.1 --protocol=TCP ping --silent 2>/dev/null; then
+            local last_log=$(docker logs houseunity-mysql-slave --tail 5 2>/dev/null)
+            if echo "$last_log" | grep -q "ready for connections" && \
+               ! echo "$last_log" | grep -q "Entrypoint"; then
+                mysql_ready=true
+                break
+            fi
+        fi
+        echo -n "."
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+    
+    echo ""
+    
+    if [ "$mysql_ready" = true ]; then
+        log "✓ MySQL Slave está completamente listo"
+    else
+        warn "MySQL Slave puede no estar completamente listo. Continuando de todas formas..."
+    fi
     
     # 8. Configurar permisos finales para uploads (crucial para Docker)
     log "Configurando permisos finales para uploads..."
@@ -848,119 +912,57 @@ setup_mysql_replication() {
        error "Archivo .env no encontrado en el directorio actual: $(pwd)"
     fi
     
-    # Esperar a que MySQL Master esté listo
-    info "Esperando que MySQL Master esté disponible..."
-    local max_attempts=30
-    local attempt=0
+    # Esperar a que MySQL Master esté listo (ya deberíahaberse hecho antes, pero verificamos)
+    info "Verificando conexión a MySQL Master..."
     
-    # Primero dar tiempo a MySQL para inicializar
-    info "Dando tiempo a MySQL para completar inicialización..."
-    sleep 10
-    
-    # Verificar que podemos conectarnos (con reintentos)
-    info "Verificando credenciales de MySQL Master..."
-    
-    # Intentar conectar con reintentos
-    while [ $attempt -lt 5 ]; do
-        TEST_RESULT=$(docker exec houseunity-mysql-master mysql --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" 2>&1)
-        TEST_EXIT_CODE=$?
+    # Cargar variables de entorno desde .env
+    if [ -f .env ]; then
+        set -a  # Marcar todas las variables para export
+        source <(grep -E '^[A-Z_]+=.*' .env | grep -v '^#')
+        set +a  # Desactivar auto-export
         
-        if [ $TEST_EXIT_CODE -eq 0 ]; then
+        if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+            warn "MYSQL_ROOT_PASSWORD no está definida en .env"
+            return 1
+        fi
+    else
+       warn "Archivo .env no encontrado"
+       return 1
+    fi
+    
+    # Verificar conexión con reintentos simples
+    local attempt=0
+    local max_attempts=10
+    
+    info "Probando conexión a MySQL Master..."
+    while [ $attempt -lt $max_attempts ]; do
+        if docker exec houseunity-mysql-master mysql -h 127.0.0.1 --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" -e "SELECT 1;" > /dev/null 2>&1; then
+            log "✓ Conexión a MySQL Master exitosa"
             break
         fi
         
         attempt=$((attempt + 1))
-        if [ $attempt -lt 5 ]; then
-            info "MySQL aún no está listo, esperando... (intento $attempt/5)"
-            sleep 5
+        if [ $attempt -lt $max_attempts ]; then
+            echo -n "."
+            sleep 3
+        else
+            echo ""
+            warn "No se pudo conectar a MySQL Master después de $max_attempts intentos"
+            echo "Últimas líneas del log:"
+            docker logs houseunity-mysql-master --tail 20
+            warn "Saltando configuración de replicación"
+            return 1
         fi
     done
-    
-    # Reiniciar contador de intentos para el siguiente paso
-    attempt=0
-    
-    if [ $TEST_EXIT_CODE -ne 0 ]; then
-        echo ""
-        warn "⚠️  No se puede conectar a MySQL Master"
-        echo ""
-        echo "Contraseña en .env:       '${MYSQL_ROOT_PASSWORD}'"
-        echo "Contraseña del contenedor: '$(docker exec houseunity-mysql-master printenv MYSQL_ROOT_PASSWORD 2>/dev/null || echo 'NO DISPONIBLE')'"
-        echo ""
-        echo "===== ERROR DE MYSQL ====="
-        echo "$TEST_RESULT"
-        echo "=========================="
-        echo ""
-        
-        # Diagnóstico adicional
-        info "Diagnóstico adicional:"
-        echo "1. Estado del contenedor:"
-        docker ps | grep houseunity-mysql-master || echo "   Contenedor no encontrado"
-        echo ""
-        echo "2. Intentando con mysqladmin:"
-        docker exec houseunity-mysql-master mysqladmin --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" ping 2>&1
-        echo ""
-        echo "3. Verificando si MySQL está listo:"
-        docker exec houseunity-mysql-master mysqladmin --protocol=TCP ping 2>&1
-        echo ""
-        
-        # Posibles soluciones
-        warn "POSIBLES CAUSAS Y SOLUCIONES:"
-        echo ""
-        echo "A) MySQL aún no ha terminado de inicializar:"
-        echo "   - Espera 30 segundos más y vuelve a ejecutar el script"
-        echo "   - Verifica logs: docker logs houseunity-mysql-master"
-        echo ""
-        echo "B) Contraseña tiene caracteres especiales o espacios:"
-        echo "   - Verifica: cat .env | grep MYSQL_ROOT_PASSWORD | cat -A"
-        echo "   - Debe ser exactamente: MYSQL_ROOT_PASSWORD=ILHFH8.pp (sin espacios)"
-        echo ""
-        echo "C) El contenedor está reiniciándose:"
-        echo "   - Verifica: docker ps -a | grep mysql-master"
-        echo "   - Si dice 'Restarting', hay un problema con el contenedor"
-        echo ""
-        
-        warn "Saltando configuración de replicación MySQL..."
-        echo "Puedes configurarla manualmente más tarde con:"
-        echo "  cd ~/Tech-Code-Proyecto/docker/scripts"
-        echo "  ./setup-replication.sh"
-        echo ""
-        return 1
-    fi
-    
-    log "✓ Conexión a MySQL Master exitosa"
-    
-    until docker exec houseunity-mysql-master mysqladmin ping --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
-        attempt=$((attempt + 1))
-        if [ $attempt -ge $max_attempts ]; then
-            error "MySQL Master no está respondiendo después de $max_attempts intentos"
-        fi
-        sleep 2
-    done
-    log "✅ MySQL Master está listo"
-    
-    # Esperar a que MySQL Slave esté listo
-    info "Esperando que MySQL Slave esté disponible..."
-    attempt=0
-    until docker exec houseunity-mysql-slave mysqladmin ping --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" --silent > /dev/null 2>&1; do
-        attempt=$((attempt + 1))
-        if [ $attempt -ge $max_attempts ]; then
-            error "MySQL Slave no está respondiendo después de $max_attempts intentos"
-        fi
-        sleep 2
-    done
-    log "✅ MySQL Slave está listo"
+    echo ""
     
     # Crear usuario de replicación en el Master
     info "Creando usuario de replicación en Master..."
-    
-    # Mostrar el error completo para diagnóstico
-    echo "Ejecutando: CREATE USER IF NOT EXISTS 'repl_user'@'%'..."
-    if docker exec houseunity-mysql-master mysql --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" -e \
-        "CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';" 2>&1; then
+    if docker exec houseunity-mysql-master mysql -h 127.0.0.1 --protocol=TCP -u root -p"${MYSQL_ROOT_PASSWORD}" -e \
+        "CREATE USER IF NOT EXISTS 'repl_user'@'%' IDENTIFIED WITH mysql_native_password BY 'Repl1c@2024';" > /dev/null 2>&1; then
         log "✓ Usuario de replicación creado/verificado"
     else
-        ERROR_CODE=$?
-        warn "Advertencia al crear usuario (código: $ERROR_CODE). Puede que ya exista, continuando..."
+        warn "Advertencia al crear usuario. Puede que ya exista, continuando..."
     fi
     
     echo "Ejecutando: GRANT REPLICATION SLAVE..."
