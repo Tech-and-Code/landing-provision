@@ -247,9 +247,16 @@ install_docker() {
             ;;
     esac
 
-    if [ -n "$USER" ] && ! id -nG "$USER" | grep -qw "docker"; then
-        log "Agregando usuario '$USER' al grupo 'docker'. Necesitarás cerrar sesión y volver a entrar."
-        sudo usermod -aG docker "$USER"
+    # Detectar el usuario real (mismo que se usa en otras partes del script)
+    local EFFECTIVE_USER="${SUDO_USER:-$USER}"
+    
+    if [ -n "$EFFECTIVE_USER" ] && ! id -nG "$EFFECTIVE_USER" 2>/dev/null | grep -qw "docker"; then
+        log "Agregando usuario '$EFFECTIVE_USER' al grupo 'docker'..."
+        sudo usermod -aG docker "$EFFECTIVE_USER"
+        log "✓ Usuario '$EFFECTIVE_USER' agregado al grupo docker"
+        warn "⚠️  Necesitarás cerrar sesión y volver a entrar para que los cambios surtan efecto"
+    else
+        log "Usuario '$EFFECTIVE_USER' ya está en el grupo docker o no se pudo detectar"
     fi
     
     sudo systemctl enable docker
