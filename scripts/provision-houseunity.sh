@@ -2,12 +2,12 @@
 
 set -e
 
-# Colores para output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+# Colores para output (optimizados para fondo negro)
+RED='\033[1;31m'      # Rojo brillante (más visible)
+GREEN='\033[1;36m'    # Cian/Verde agua (muy visible, no azul)
+YELLOW='\033[1;33m'   # Amarillo brillante (mantener)
+BLUE='\033[1;36m'     # Cian en lugar de azul oscuro
+NC='\033[0m'          # Sin color
 
 # Nombre del archivo de configuración del script
 CONFIG_FILE=".provision.conf"
