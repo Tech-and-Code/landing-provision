@@ -148,15 +148,21 @@ update_system() {
                 echo "deltarpm=True" | sudo tee -a /etc/dnf/dnf.conf > /dev/null
             fi
             
-            # Limpiar caché viejo
+            # Limpiar caché completamente
+            log "Limpiando caché de DNF..."
             sudo dnf clean all > /dev/null 2>&1 || true
+            sudo rm -rf /var/cache/dnf/* 2>/dev/null || true
+            
+            # Reconstruir caché
+            log "Reconstruyendo metadatos..."
+            sudo dnf makecache --refresh 2>&1 | grep -E "Metadata|Complete" || true
             
             if [ "$ENV_MODE" = "prod" ]; then
                 log "Actualizando sistema completo..."
-                sudo dnf update -y --nobest --skip-broken
+                sudo dnf update -y --nobest --skip-broken --allowerasing
             else
-                log "Actualizando paquetes críticos..."
-                sudo dnf update -y --security --nobest 2>&1 | grep -E "Upgrading|Installing|Complete|Nothing" || true
+                log "Actualizando paquetes críticos (omitiendo conflictos)..."
+                sudo dnf update -y --skip-broken --nobest 2>&1 | grep -E "Upgrading|Installing|Complete|Nothing|Skipping" || true
             fi
             ;;
         *)
@@ -183,9 +189,9 @@ install_basic_tools() {
                 sudo dnf install -y epel-release || warn "No se pudo instalar EPEL, continuando..."
             fi
             
-            # Instalar paquetes básicos
+            # Instalar paquetes básicos (con manejo de conflictos)
             log "Instalando paquetes esenciales..."
-            sudo dnf install -y git curl wget rsync openssh-clients openssh-server \
+            sudo dnf install -y --skip-broken --allowerasing git curl wget rsync openssh-clients openssh-server \
                 unzip nano vim make tree net-tools || warn "Algunos paquetes básicos fallaron, continuando..."
             
             # Intentar instalar htop (puede fallar si EPEL no está disponible)
@@ -233,11 +239,18 @@ install_docker() {
             if [ "$OS" == "fedora" ]; then
                 sudo dnf -y install dnf-plugins-core
                 sudo dnf config-manager --add-repo https://download.docker.com/linux/fedora/docker-ce.repo
-                sudo dnf -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin
+                sudo dnf -y install --allowerasing docker-ce docker-ce-cli containerd.io docker-compose-plugin
             else
                 sudo dnf install -y dnf-plugins-core
                 sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-                sudo dnf install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+                
+                # Remover paquetes conflictivos (podman/buildah/runc)
+                log "Removiendo paquetes conflictivos con Docker..."
+                sudo dnf remove -y podman buildah runc 2>/dev/null || true
+                
+                # Instalar Docker
+                log "Instalando Docker CE..."
+                sudo dnf install -y --allowerasing --nobest docker-ce docker-ce-cli containerd.io docker-compose-plugin
             fi
             ;;
         *)
