@@ -66,7 +66,7 @@ load_or_prompt_config() {
     
     # 2. Solicitar URL del repositorio
     while [ -z "$REPO_URL" ]; do
-        read -r -p "Introduce la URL SSH de tu repositorio GitHub (ej: git@github.com:Tech-and-Code/Tech-Code-Proyecto.git): " REPO_URL
+        read -r -p "Introduce la URL de tu repositorio GitHub (SSH o HTTPS, ej: git@github.com:user/repo.git o https://github.com/user/repo.git): " REPO_URL
         if [ -z "$REPO_URL" ]; then
             warn "La URL del repositorio es obligatoria."
         fi
@@ -551,12 +551,55 @@ setup_github_ssh() {
     sudo -u "$EFFECTIVE_USER" ssh -T git@github.com || true
 }
 
+# Función para verificar si el puerto 22 está bloqueado y convertir URL SSH a HTTPS
+check_and_convert_repo_url() {
+    local repo_url=$1
+    local EFFECTIVE_USER="${SUDO_USER:-$USER}"
+    
+    # Si ya es HTTPS, retornar directamente
+    if [[ "$repo_url" =~ ^https:// ]]; then
+        echo "$repo_url"
+        return 0
+    fi
+    
+    # Si es SSH, verificar si el puerto 22 está disponible
+    if [[ "$repo_url" =~ ^git@ ]]; then
+        # Extraer el host (ej: github.com de git@github.com:user/repo.git)
+        local git_host=$(echo "$repo_url" | sed -E 's/git@([^:]+):.*/\1/')
+        
+        info "Verificando conectividad SSH al puerto 22 de $git_host..."
+        
+        # Probar conexión SSH con timeout de 5 segundos
+        if timeout 5 bash -c "echo > /dev/tcp/$git_host/22" 2>/dev/null; then
+            log "✓ Puerto 22 accesible. Usando URL SSH original."
+            echo "$repo_url"
+        else
+            warn "⚠ Puerto 22 bloqueado o inaccesible. Convirtiendo a URL HTTPS..."
+            
+            # Convertir git@github.com:user/repo.git a https://github.com/user/repo.git
+            local https_url=$(echo "$repo_url" | sed -E 's#git@([^:]+):(.+)#https://\1/\2#')
+            
+            log "URL convertida: $https_url"
+            warn "Nota: Si el repositorio es privado, Git solicitará tus credenciales de GitHub."
+            warn "Considera usar un Personal Access Token en lugar de tu contraseña."
+            
+            echo "$https_url"
+        fi
+    else
+        # Formato desconocido, retornar como está
+        echo "$repo_url"
+    fi
+}
+
 clone_repository() {
     local repo_url=$1
     local target_dir=$2
 
     # Detectar el usuario real incluso si se ejecuta con sudo
     local EFFECTIVE_USER="${SUDO_USER:-$USER}"
+    
+    # Verificar y convertir URL si es necesario
+    repo_url=$(check_and_convert_repo_url "$repo_url")
 
     log "Clonando repositorio: $repo_url en $target_dir"
 
