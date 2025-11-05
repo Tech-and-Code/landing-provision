@@ -463,7 +463,11 @@ setup_ssh() {
     fi
     
     log "Reiniciando servicio SSH..."
-    sudo systemctl restart sshd || sudo systemctl restart ssh
+    if sudo systemctl restart sshd 2>/dev/null || sudo systemctl restart ssh 2>/dev/null; then
+        log "✓ Servicio SSH reiniciado correctamente"
+    else
+        warn "⚠ No se pudo reiniciar el servicio SSH, pero continuando..."
+    fi
     
     log "SSH configurado correctamente"
 }
@@ -472,6 +476,15 @@ setup_ssh() {
 # Configurar autenticación SSH con GitHub y copia opcional a Windows
 # ------------------------------------------------------------
 setup_github_ssh() {
+    # Primero verificar si el puerto 22 está accesible
+    info "Verificando disponibilidad del puerto 22 para SSH..."
+    if ! timeout 5 bash -c "echo > /dev/tcp/github.com/22" 2>/dev/null; then
+        warn "⚠ Puerto 22 bloqueado o inaccesible para GitHub"
+        warn "Se omitirá la configuración de SSH. El script usará HTTPS para clonar repositorios."
+        info "Si deseas usar SSH más adelante, configúralo manualmente."
+        return 0
+    fi
+    
     log "Configurando acceso SSH a GitHub..."
 
     # Detectar el usuario real incluso si se ejecuta con sudo
@@ -547,8 +560,14 @@ setup_github_ssh() {
         read -r -p "Presiona Enter cuando la hayas agregado..."
     fi
 
-    log "Probando conexión SSH con GitHub..."
-    sudo -u "$EFFECTIVE_USER" ssh -T git@github.com || true
+    log "Probando conexión SSH con GitHub (timeout 10 segundos)..."
+    # Usar timeout y opciones SSH para evitar que se quede colgado
+    if timeout 10 sudo -u "$EFFECTIVE_USER" ssh -T -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new git@github.com 2>&1 | grep -q "successfully authenticated"; then
+        log "✓ Autenticación SSH con GitHub exitosa"
+    else
+        warn "⚠ No se pudo verificar la conexión SSH (puede ser por puerto 22 bloqueado)"
+        info "El script intentará usar HTTPS automáticamente si es necesario"
+    fi
 }
 
 # Función para verificar si el puerto 22 está bloqueado y convertir URL SSH a HTTPS
