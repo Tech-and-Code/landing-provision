@@ -64,7 +64,8 @@ load_or_prompt_config() {
         fi
     done
     
-    # 2. Solicitar URL del repositorio
+    # 2. Solicitar SIEMPRE la URL del repositorio (sobrescribe la anterior)
+    REPO_URL=""
     while [ -z "$REPO_URL" ]; do
         read -r -p "Introduce la URL de tu repositorio GitHub (SSH o HTTPS, ej: git@github.com:user/repo.git o https://github.com/user/repo.git): " REPO_URL
         if [ -z "$REPO_URL" ]; then
@@ -657,8 +658,26 @@ clone_repository() {
             if sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"; then
                 log "✓ Repositorio actualizado correctamente"
             else
-                error "Fallo al actualizar el repositorio. Verifica conflictos o problemas de conexión."
-                return 1
+                warn "Fallo al actualizar por SSH. Intentando convertir el remoto a HTTPS..."
+                # Obtener la URL SSH actual
+                local current_url
+                current_url=$(sudo -u "$EFFECTIVE_USER" git remote get-url origin)
+                # Convertir a HTTPS si es SSH
+                if [[ "$current_url" =~ ^git@ ]]; then
+                    local https_url
+                    https_url=$(echo "$current_url" | sed -E 's#git@([^:]+):(.+)#https://\1/\2#')
+                    log "Cambiando remoto origin a: $https_url"
+                    sudo -u "$EFFECTIVE_USER" git remote set-url origin "$https_url"
+                    if sudo -u "$EFFECTIVE_USER" git pull origin "$default_branch"; then
+                        log "✓ Repositorio actualizado correctamente por HTTPS"
+                    else
+                        error "Fallo al actualizar el repositorio por HTTPS. Verifica conflictos o problemas de conexión."
+                        return 1
+                    fi
+                else
+                    error "Fallo al actualizar el repositorio. Verifica conflictos o problemas de conexión."
+                    return 1
+                fi
             fi
         else
             # Directorio tiene archivos pero no es un repo git
